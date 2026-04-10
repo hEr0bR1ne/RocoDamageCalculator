@@ -15,16 +15,53 @@ from .constants import ALL_STATS
 from .data import DATA_PATH
 from .calculator import calculate
 
-# ── OCR 区域定义（针对 2560×1440 截图）─────────────────────────────────────
-# 格式：(left, top, right, bottom)
-REGION_2560 = {
-    "self_name":  (40,   35,  420,  115),
-    "enemy_name": (2050, 35,  2490, 115),
-    "skill1":     (250,  500, 540,  650),
-    "skill2":     (250,  680, 540,  835),
-    "skill3":     (250,  845, 540,  1010),
-    "skill4":     (320,  1020, 640, 1210),
+# ── OCR 区域定义（归一化比例，适用于任意分辨率）───────────────────────────────
+# 格式：(left, top, right, bottom)，值为 0.0~1.0 相对比例
+# 默认值由 2560×1440 实测坐标推导
+REGIONS_RATIO = {
+    "self_name":  ( 40/2560,  20/1440,  560/2560,  160/1440),
+    "enemy_name": (1980/2560,  20/1440, 2490/2560,  160/1440),
+    "skill1":     ( 250/2560, 500/1440,  540/2560,  650/1440),
+    "skill2":     ( 250/2560, 680/1440,  540/2560,  835/1440),
+    "skill3":     ( 250/2560, 845/1440,  540/2560, 1010/1440),
+    "skill4":     ( 320/2560,1020/1440,  640/2560, 1210/1440),
 }
+
+# 自定义区域配置文件（OCR Demo 保存后自动加载）
+_REGIONS_CONFIG = Path(__file__).parent.parent / "roco_regions.json"
+
+# 游戏画面裁剪区域默认值（相对于整张截图的比例）
+# 全屏模式 = (0,0,1,1)；窗口模式时调小 top 以去掉标题栏
+_DEFAULT_GAME_AREA = (0.0, 0.0, 1.0, 1.0)
+_GAME_AREA_KEY     = "_game_area"
+
+
+def load_regions() -> tuple[dict, tuple]:
+    """加载自定义区域比例与游戏画面区域；配置文件不存在时返回内置默认值。
+    返回 (regions_dict, game_area_tuple)。
+    """
+    if _REGIONS_CONFIG.exists():
+        import json
+        try:
+            with open(_REGIONS_CONFIG, encoding="utf-8") as f:
+                data = json.load(f)
+            regions = {k: tuple(v) for k, v in data.items()
+                       if k in REGIONS_RATIO}
+            game_area = tuple(data.get(_GAME_AREA_KEY, _DEFAULT_GAME_AREA))
+            if set(regions.keys()) == set(REGIONS_RATIO.keys()):
+                return regions, game_area
+        except Exception:
+            pass
+    return dict(REGIONS_RATIO), _DEFAULT_GAME_AREA
+
+
+def save_regions(regions: dict, game_area: tuple = _DEFAULT_GAME_AREA) -> None:
+    """将区域比例和游戏画面区域保存到配置文件，供下次启动自动加载。"""
+    import json
+    data = {k: list(v) for k, v in regions.items()}
+    data[_GAME_AREA_KEY] = list(game_area)
+    with open(_REGIONS_CONFIG, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
 
 # ── 默认竞技场参数（OCR 无法识别的字段使用默认值）───────────────────────────
 DEFAULT_TALENT       = 10
@@ -88,17 +125,32 @@ def best_match(texts: list[str], candidates: list[str], min_score: float = 0.4) 
     return None, best_score
 
 
-def scale_regions(img_width: int, img_height: int) -> dict:
-    sw = img_width  / 2560
-    sh = img_height / 1440
+def scale_regions(img_width: int, img_height: int,
+                  regions_ratio: dict | None = None) -> dict:
+    if regions_ratio is None:
+        regions_ratio = load_regions()
     return {
-        k: (int(l * sw), int(t * sh), int(r * sw), int(b * sh))
-        for k, (l, t, r, b) in REGION_2560.items()
+        k: (int(l * img_width),  int(t * img_height),
+            int(r * img_width),  int(b * img_height))
+        for k, (l, t, r, b) in regions_ratio.items()
     }
 
 
-def analyze_image(img: Image.Image, db: dict, spirit_names: list, skill_names: list) -> dict:
-    regions = scale_regions(img.width, img.height)
+def analyze_image(img: Image.Image, db: dict, spirit_names: list, skill_names: list,
+                  regions_ratio: dict | None = None,
+                  game_area: tuple | None = None) -> dict:
+    """分析截图。
+    game_area: (left, top, right, bottom) 相对比例，指定实际游戏画面范围。
+    全屏时传 None 或 (0,0,1,1)；窗口模式时设置以排除标题栏等边框。
+    """
+    if game_area is None:
+        game_area = _DEFAULT_GAME_AREA
+    ga_l, ga_t, ga_r, ga_b = game_area
+    # 先裁剪到游戏画面区域
+    w, h = img.size
+    img = img.crop((int(ga_l * w), int(ga_t * h),
+                    int(ga_r * w), int(ga_b * h)))
+    regions = scale_regions(img.width, img.height, regions_ratio)
     result = {}
     for key, box in regions.items():
         texts      = ocr_region(img, box)
