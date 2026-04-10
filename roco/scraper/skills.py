@@ -13,7 +13,9 @@ from bs4 import BeautifulSoup
 
 BASE_URL        = "https://wiki.biligame.com"
 SKILL_INDEX_URL = "https://wiki.biligame.com/rocom/%E6%8A%80%E8%83%BD%E5%9B%BE%E9%89%B4"
-OUTPUT_DIR = Path(__file__).parent.parent.parent / "data"
+import sys as _sys
+OUTPUT_DIR = ((Path(_sys.executable).parent if getattr(_sys, "frozen", False)
+               else Path(__file__).parent.parent.parent) / "data")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 HEADERS = {

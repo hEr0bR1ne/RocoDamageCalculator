@@ -2,10 +2,14 @@
 数据加载：精灵数据库与技能数据库 JSON 文件读取
 """
 import json
+import sys
 from pathlib import Path
 
-DATA_PATH       = Path(__file__).parent.parent / "data" / "精灵完整数据.json"
-SKILL_DATA_PATH = Path(__file__).parent.parent / "data" / "技能完整数据.json"
+# frozen exe 时 __file__ 在 MEIPASS（临时目录），数据文件放在 exe 同级目录
+_BASE = (Path(sys.executable).parent if getattr(sys, "frozen", False)
+         else Path(__file__).parent.parent)
+DATA_PATH       = _BASE / "data" / "精灵完整数据.json"
+SKILL_DATA_PATH = _BASE / "data" / "技能完整数据.json"
 
 
 def load_data() -> dict[str, dict]:

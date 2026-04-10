@@ -28,7 +28,9 @@ REGIONS_RATIO = {
 }
 
 # 自定义区域配置文件（OCR Demo 保存后自动加载）
-_REGIONS_CONFIG = Path(__file__).parent.parent / "roco_regions.json"
+import sys as _sys
+_REGIONS_CONFIG = ((Path(_sys.executable).parent if getattr(_sys, "frozen", False)
+                    else Path(__file__).parent.parent) / "roco_regions.json")
 
 # 游戏画面裁剪区域默认值（相对于整张截图的比例）
 # 全屏模式 = (0,0,1,1)；窗口模式时调小 top 以去掉标题栏

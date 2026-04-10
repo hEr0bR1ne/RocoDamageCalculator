@@ -9,6 +9,59 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import scrolledtext
 
+_IS_FROZEN = getattr(sys, "frozen", False)
+
+
+def _tool_dispatch() -> None:
+    """
+    打包为 exe 后，以 RocoLauncher.exe --tool <name> [args...] 方式启动时，
+    直接运行对应工具模块，然后退出。
+    供 launcher 通过 subprocess 调用子工具时使用（无需额外 Python 环境）。
+    """
+    if not _IS_FROZEN:
+        return
+    if len(sys.argv) < 3 or sys.argv[1] != "--tool":
+        return
+
+    tool = sys.argv[2]
+    sys.argv = [sys.argv[0]] + sys.argv[3:]   # 其余参数交给工具自己解析
+
+    if tool == "damage-gui":
+        import damage_gui
+        app = damage_gui.App()
+        app.mainloop()
+
+    elif tool == "analyzer":
+        from roco.analyzer import main as _main
+        try:
+            _main()
+        except KeyboardInterrupt:
+            pass
+
+    elif tool == "damage-calc":
+        # GUI 子系统进程，需显式分配控制台窗口才能交互
+        import ctypes
+        ctypes.windll.kernel32.AllocConsole()
+        sys.stdin  = open("CONIN$",  "r")
+        sys.stdout = open("CONOUT$", "w")
+        sys.stderr = sys.stdout
+        from roco.calculator import interactive
+        interactive()
+
+    elif tool == "spirit-scraper":
+        from roco.scraper.spirits import main as _main
+        _main()
+
+    elif tool == "skill-scraper":
+        from roco.scraper.skills import main as _main
+        _main()
+
+    sys.exit(0)
+
+
+_tool_dispatch()  # 必须在 Tk 初始化之前执行
+
+
 def _resolve_root_and_python() -> tuple[Path, str]:
     """
     打包为 exe 后 sys.executable 指向 exe 自身，需要找到 .venv 里的真实 Python。
@@ -172,12 +225,16 @@ def _launch_in_new_terminal(args: list[str]):
 # ── 各工具动作 ────────────────────────────────────────────────────────────────
 
 def action_gui(card: ToolCard):
-    _launch_subprocess(card, [PYTHON, str(ROOT / "damage_gui.py")])
+    args = ([sys.executable, "--tool", "damage-gui"] if _IS_FROZEN
+            else [PYTHON, str(ROOT / "damage_gui.py")])
+    _launch_subprocess(card, args)
 
 
 def action_analyzer_clipboard(card: ToolCard):
     out = OutputWindow(card.winfo_toplevel(), "对战截图分析器 — 剪切板监听")
-    _launch_subprocess(card, [PYTHON, str(ROOT / "battle_analyzer.py")], out)
+    args = ([sys.executable, "--tool", "analyzer"] if _IS_FROZEN
+            else [PYTHON, str(ROOT / "battle_analyzer.py")])
+    _launch_subprocess(card, args, out)
 
 
 def action_analyzer_once(card: ToolCard):
@@ -188,25 +245,34 @@ def action_analyzer_once(card: ToolCard):
     if not path:
         return
     out = OutputWindow(card.winfo_toplevel(), f"截图分析：{Path(path).name}")
-    _launch_subprocess(
-        card,
-        [PYTHON, str(ROOT / "battle_analyzer.py"), "--once", path],
-        out,
-    )
+    args = ([sys.executable, "--tool", "analyzer", "--once", path] if _IS_FROZEN
+            else [PYTHON, str(ROOT / "battle_analyzer.py"), "--once", path])
+    _launch_subprocess(card, args, out)
 
 
 def action_cli_calc(card: ToolCard):
-    _launch_in_new_terminal([PYTHON, str(ROOT / "damage_calc.py")])
+    if _IS_FROZEN:
+        subprocess.Popen(
+            [sys.executable, "--tool", "damage-calc"],
+            creationflags=subprocess.CREATE_NEW_CONSOLE,
+            cwd=ROOT,
+        )
+    else:
+        _launch_in_new_terminal([PYTHON, str(ROOT / "damage_calc.py")])
 
 
 def action_spirit_scraper(card: ToolCard):
     out = OutputWindow(card.winfo_toplevel(), "精灵图鉴爬虫")
-    _launch_subprocess(card, [PYTHON, str(ROOT / "rocom_scraper.py")], out)
+    args = ([sys.executable, "--tool", "spirit-scraper"] if _IS_FROZEN
+            else [PYTHON, str(ROOT / "rocom_scraper.py")])
+    _launch_subprocess(card, args, out)
 
 
 def action_skill_scraper(card: ToolCard):
     out = OutputWindow(card.winfo_toplevel(), "技能图鉴爬虫")
-    _launch_subprocess(card, [PYTHON, str(ROOT / "skill_scraper.py")], out)
+    args = ([sys.executable, "--tool", "skill-scraper"] if _IS_FROZEN
+            else [PYTHON, str(ROOT / "skill_scraper.py")])
+    _launch_subprocess(card, args, out)
 
 
 # ── 主窗口 ────────────────────────────────────────────────────────────────────
