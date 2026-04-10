@@ -1,145 +1,169 @@
+<div align="center">
+
 # RocoDamageCalculator
 
-洛克王国手游 PVP 伤害计算器，包含 Python 桌面版、核心计算逻辑，以及一个基于 Next.js 的 Web 版本。
+**洛克王国 PVP 伤害计算器**
 
-这个仓库的目标不是只做一个界面，而是把公式、数据和展示层拆开。
+[![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Next.js](https://img.shields.io/badge/Next.js-15-000000?logo=next.js)](https://nextjs.org/)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-- damage_calc.py 负责核心计算
-- damage_gui.py 提供桌面端 GUI
-- web/ 提供 Web 版交互界面
-- 爬虫脚本负责更新精灵和技能数据
+精确计算竞技场伤害 · 截图 OCR 自动识别 · 支持桌面版与 Web 版
 
-## Features
+</div>
 
-- 按种族值、性格、天分档位计算竞技场属性
-- 支持技能威力、属性克制、本系补正、天气、减伤、攻防增减益等伤害因子
-- 内置部分应对技能的特殊威力修正逻辑
-- 提供 Python Tkinter 桌面版
-- 提供 Next.js Web 版
-- 支持从 Wiki 抓取精灵图鉴与技能图鉴数据
+---
 
-## Quick Start
+## ✨ Features
 
-### Python 桌面版
+| 功能 | 说明 |
+|------|------|
+| 伤害计算 | 按种族值、性格、天分档位计算竞技场六维属性与实际伤害 |
+| 完整修正 | 技能威力、属性克制、本系补正、天气、减伤、攻防增减益 |
+| 特殊技能 | 内置部分应对技能的威力修正逻辑（如特定反制倍率） |
+| OCR 分析 | 对战截图自动识别我方 / 敌方精灵名与可用技能列表 |
+| 图形启动器 | 一键启动所有工具，实时显示运行输出 |
+| 数据爬取 | 从 Wiki 自动抓取精灵图鉴与技能图鉴，写入本地 `data/` |
 
-建议环境：Python 3.10+
+---
 
-\\ash
+## 🚀 Quick Start
+
+### 桌面版（Python）
+
+> 要求：Python 3.10+
+
+```bash
+git clone https://github.com/hEr0bR1ne/RocoDamageCalculator.git
+cd RocoDamageCalculator
 pip install -r requirements.txt
-python damage_gui.py
-\
-注意：桌面版入口是 damage_gui.py，不是 gui.py。
+python launcher.py          # 图形化启动器（推荐）
+python damage_gui.py        # 直接启动 GUI 计算器
+```
 
-### Web 版
+### Web 版（Next.js）
 
-建议环境：Node.js 18+
+> 要求：Node.js 18+
 
-\\ash
+```bash
 cd web
 npm install
 npm run dev
-\
-启动后默认访问：http://localhost:3000
+```
 
-## Repository Layout
+访问 `http://localhost:3000`
 
-\\	ext
-.
-|-- damage_calc.py        # 核心伤害计算逻辑
-|-- damage_gui.py         # Tkinter 桌面界面
-|-- battle_analyzer.py    # 对战截图 OCR 分析器
-|-- launcher.py           # 图形化启动器
-|-- rocom_scraper.py      # 精灵图鉴爬虫
-|-- skill_scraper.py      # 技能图鉴爬虫
-|-- requirements.txt      # Python 依赖
-|-- data/                 # 采集后的数据文件
-|-- roco/                 # 核心逻辑包
-|   |-- constants.py      # 游戏常量
-|   |-- data.py           # 数据加载
-|   |-- stats.py          # 属性计算
-|   |-- calculator.py     # 伤害计算 + CLI
-|   |-- analyzer.py       # 截图 OCR 分析
-|   \-- scraper/          # 爬虫子包
-|-- web/                  # Next.js Web 版
-\
-## Data
+---
 
-当前项目主要使用以下数据文件：
+## 📁 Repository Layout
 
-- data/精灵完整数据.json
-- data/技能完整数据.json
-- data/精灵基础数据.csv
-- data/精灵技能组.csv
-- data/技能数据.csv
+```text
+RocoDamageCalculator/
+├── damage_calc.py          # 核心伤害计算（→ roco/calculator.py）
+├── damage_gui.py           # Tkinter 桌面 GUI
+├── battle_analyzer.py      # 对战截图 OCR 分析器（→ roco/analyzer.py）
+├── launcher.py             # 图形化工具启动器
+├── rocom_scraper.py        # 精灵图鉴爬虫（→ roco/scraper/spirits.py）
+├── skill_scraper.py        # 技能图鉴爬虫（→ roco/scraper/skills.py）
+├── requirements.txt
+├── data/                   # 本地数据文件（由爬虫生成）
+│   ├── 精灵完整数据.json
+│   ├── 技能完整数据.json
+│   └── *.csv
+├── roco/                   # 核心逻辑包
+│   ├── constants.py        # 游戏常量（性格 / 属性 / 天气 / 应对表）
+│   ├── data.py             # 数据加载
+│   ├── stats.py            # 属性计算
+│   ├── calculator.py       # 伤害计算 + 交互式 CLI
+│   ├── analyzer.py         # 截图 OCR 分析
+│   └── scraper/
+│       ├── spirits.py      # 精灵 Wiki 爬虫
+│       └── skills.py       # 技能 Wiki 爬虫
+└── web/                    # Next.js Web 版
+    ├── public/data/        # 前端静态数据
+    └── scripts/
+        └── sync-data.mjs   # 从 data/ 同步到 public/data/
+```
 
-数据使用方式：
+---
 
-- Python 版直接读取 data/ 下的数据
-- Web 版通过 web/scripts/sync-data.mjs 同步数据到 web/public/data/
+## 📊 Data
 
-## Update Data
+数据文件位于 `data/`，由爬虫脚本生成：
 
-更新精灵图鉴：
+```bash
+python rocom_scraper.py   # 更新精灵图鉴
+python skill_scraper.py   # 更新技能图鉴
+```
 
-\\ash
-python rocom_scraper.py
-\
-更新技能图鉴：
+| 文件 | 内容 |
+|------|------|
+| `精灵完整数据.json` | 所有精灵的种族值、属性、技能组等完整信息 |
+| `技能完整数据.json` | 技能威力、属性、效果等完整信息 |
+| `精灵基础数据.csv` | 精灵基础属性表格 |
+| `精灵技能组.csv` | 精灵可学技能列表 |
+| `技能数据.csv` | 技能数据表格 |
 
-\\ash
-python skill_scraper.py
-\
-输出结果会写入 data/ 目录。
+- Python 版直接读取 `data/` 下的 JSON 文件
+- Web 版通过 `scripts/sync-data.mjs` 同步到 `web/public/data/`
 
-## Web Build
+---
 
-构建静态站点：
+## ⚙️ Tech Stack
 
-\\ash
-cd web
-npm run build
-\
-构建产物位于 web/out/，可以直接部署到静态托管平台。
+**Python**
 
-## Formula Notes
+| 包 | 用途 |
+|----|------|
+| `requests` · `beautifulsoup4` | Wiki 数据爬取 |
+| `rapidocr-onnxruntime` | 截图文字识别 |
+| `Pillow` | 图像处理 |
+| `tkinter` | 桌面 GUI（标准库） |
 
-项目目前实现的核心逻辑包括：
+**Web**
 
-- 基于种族值、个体值档位和性格修正计算六维属性
-- 基于攻击、防御、技能威力、属性克制、天气和减伤计算 PVP 伤害
-- 对部分特殊技能增加应对成功后的倍率或加值修正
+| 包 | 用途 |
+|----|------|
+| `Next.js 15` · `React` | 前端框架 |
+| `TypeScript` | 类型安全 |
 
-更详细的公式说明可直接查阅 damage_calc.py 文件头部注释。
+---
 
-## Tech Stack
+## 📐 Formula Notes
 
-Python:
+核心伤害公式：
 
-- 
-equests
-- eautifulsoup4
-- 
-apidocr-onnxruntime
-- 	kinter（标准库）
+$$
+\text{伤害} = \left\lfloor \frac{\text{攻击} \times \text{威力}}{\text{防御}} \times \text{属性克制} \times \text{本系补正} \times \text{天气} \times \text{减伤修正} \right\rfloor
+$$
 
-Web:
+| 修正项 | 说明 |
+|--------|------|
+| 属性克制 | 由技能属性 vs 目标属性决定，最高 2.0×，最低 0.5× |
+| 本系补正 | 技能属性与使用者属性相同时 ×1.5 |
+| 天气 | 晴天 / 雨天等对特定属性技能 ×1.5 或 ×0.5 |
+| 减伤修正 | 应对技能成功后的专属倍率或加值 |
 
-- 
-ext
-- 
-eact
-- 	ypescript
+详细实现见 [`roco/calculator.py`](roco/calculator.py)。
 
-## Notes
+---
 
-- 爬虫依赖外部 Wiki 页面结构，如果页面改版，解析逻辑可能需要调整
-- 部分公式和天气修正仍有待进一步验证，具体以代码注释为准
-- 如果只使用桌面版，不需要安装 Node.js
-- 如果只使用 Web 版，不需要安装 Python 依赖，但仓库中的数据文件必须存在
+## 🗺️ Roadmap
 
-## Roadmap
+- [x] 核心伤害计算公式
+- [x] Tkinter 桌面 GUI
+- [x] 爬虫自动更新数据
+- [x] 对战截图 OCR 分析
+- [x] 图形化工具启动器
+- [x] Next.js Web 版
+- [ ] 单元测试覆盖核心公式
+- [ ] 支持更多特殊技能判断
+- [ ] 自动化数据同步 CI / CD
 
-- 增加命令行版本入口
-- 为核心公式补充单元测试
-- 支持更多技能特殊判断
-- 自动化数据同步与发布流程
+---
+
+## 📝 Notes
+
+- 爬虫依赖 Wiki 页面结构，若页面改版解析逻辑需同步更新
+- OCR 区域坐标基于 **2560×1440** 分辨率截图，其他分辨率需调整 `roco/analyzer.py` 中的 `REGION_2560`
+- 仅使用桌面版不需要安装 Node.js；仅使用 Web 版不需要安装 Python 依赖，但 `data/` 中的 JSON 文件必须存在
