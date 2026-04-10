@@ -244,10 +244,10 @@ class Launcher(tk.Tk):
              "交互式命令行伤害计算器，在新终端窗口中运行。",
              action_cli_calc, "打开终端", ORANGE),
             ("精灵数据更新",
-             "爬取 wiki 精灵图鉴，更新 output/精灵完整数据.json（需联网）。",
+             "爬取 wiki 精灵图鉴，更新 data/精灵完整数据.json（需联网）。",
              action_spirit_scraper, "开始爬取", RED),
             ("技能数据更新",
-             "爬取 wiki 技能图鉴，更新 output/技能完整数据.json（需联网）。",
+             "爬取 wiki 技能图鉴，更新 data/技能完整数据.json（需联网）。",
              action_skill_scraper, "开始爬取", RED),
         ]
 

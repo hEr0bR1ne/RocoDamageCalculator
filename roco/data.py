@@ -4,8 +4,8 @@
 import json
 from pathlib import Path
 
-DATA_PATH       = Path(__file__).parent.parent / "output" / "精灵完整数据.json"
-SKILL_DATA_PATH = Path(__file__).parent.parent / "output" / "技能完整数据.json"
+DATA_PATH       = Path(__file__).parent.parent / "data" / "精灵完整数据.json"
+SKILL_DATA_PATH = Path(__file__).parent.parent / "data" / "技能完整数据.json"
 
 
 def load_data() -> dict[str, dict]:
