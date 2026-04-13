@@ -56,7 +56,7 @@ def _tool_dispatch() -> None:
     elif tool == "analyzer-watch":
         import sys as _s
         _s.argv = [_s.argv[0], "--watch", "--window", "洛克王国：世界",
-                   "--region", "0,0,1920,1080"]
+                   "--region", "0,40,1920,1080"]
         from roco.analyzer import main as _main
         try:
             _main()
@@ -194,11 +194,11 @@ class ToolCard(tk.Frame):
 class OutputWindow(tk.Toplevel):
     """悬浮输出窗口，显示子进程的 stdout/stderr。"""
 
-    def __init__(self, parent, title: str):
+    def __init__(self, parent, title: str, geometry: str | None = None):
         super().__init__(parent)
         self.title(title)
         self.configure(bg=BG)
-        self.geometry("760x420")
+        self.geometry(geometry or "760x420")
         self.resizable(True, True)
 
         _font = _pick_cjk_font()
@@ -269,11 +269,13 @@ def action_analyzer_clipboard(card: ToolCard):
 
 
 def action_analyzer_watch(card: ToolCard):
-    out = OutputWindow(card.winfo_toplevel(), "对战截图分析器 — 自动监控")
+    # 2K 显示器(2560×1440)：游戏占左侧 1920×1080，输出窗口贴右侧同等高度
+    out = OutputWindow(card.winfo_toplevel(), "对战截图分析器 — 自动监控",
+                       geometry="640x1080+1920+0")
     args = ([sys.executable, "--tool", "analyzer-watch"] if _IS_FROZEN
             else [PYTHON, "-u", "-X", "utf8", str(ROOT / "battle_analyzer.py"),
                   "--watch", "--window", "洛克王国：世界",
-                  "--region", "0,0,1920,1080"])
+                  "--region", "0,40,1920,1080"])
     _launch_subprocess(card, args, out)
 
 
