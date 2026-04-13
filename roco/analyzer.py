@@ -362,8 +362,12 @@ def print_analysis(analysis: dict, db: dict, spirit_names: list, interactive: bo
         print("  未提供对方精灵名，跳过伤害计算。")
         return
 
-    # ── 简易伤害估算 ──────────────────────────────────────────
+    # ── 简易伤害估算（监控模式主要输出）────────────────────────
     _quick_damage(self_name, enemy_name, analysis, skill_keys, db)
+
+    # ── 完整计算器（仅交互模式）─────────────────────────────────
+    if not interactive:
+        return
 
     skills = find_skills_for_spirit(self_name, skill_keys, analysis, db)
 
