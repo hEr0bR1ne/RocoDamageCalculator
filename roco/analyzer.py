@@ -256,44 +256,67 @@ def prompt_spirit_name(prompt: str, db: dict, spirit_names: list) -> str | None:
             return None
 
 
-def _quick_damage(self_name: str, enemy_name: str, analysis: dict,
-                  skill_keys: list, db: dict) -> None:
-    """简易公式快速伤害估算：攻÷防×0.9×显示威力×连击×(1-减伤)。"""
+def calc_quick_damage(self_name: str, enemy_name: str, analysis: dict,
+                      skill_keys: list, db: dict) -> list[dict]:
+    """
+    简易公式伤害估算，返回结构化列表供 GUI 显示。
+    每项：{num, name, score, cat, power, hits, reduce_pct, dmg, pct_hp}
+    power/dmg/pct_hp 为 None 表示无法估算。
+    """
     import math
     atk_sp = db.get(self_name, {})
     def_sp = db.get(enemy_name, {})
-    if not atk_sp or not def_sp:
-        return
+    results = []
 
-    atk_stats = _calc_stats(atk_sp, DEFAULT_TALENT, DEFAULT_TALENT_STATS, DEFAULT_NATURE)
-    def_stats = _calc_stats(def_sp, DEFAULT_TALENT, DEFAULT_TALENT_STATS, DEFAULT_NATURE)
-    def_hp    = def_stats["生命"]
+    atk_stats = def_stats = def_hp = None
+    if atk_sp and def_sp:
+        atk_stats = _calc_stats(atk_sp, DEFAULT_TALENT, DEFAULT_TALENT_STATS, DEFAULT_NATURE)
+        def_stats = _calc_stats(def_sp, DEFAULT_TALENT, DEFAULT_TALENT_STATS, DEFAULT_NATURE)
+        def_hp    = def_stats["生命"]
 
-    lines = []
     for i, sk in enumerate(skill_keys, 1):
-        pk = f"skill{i}_power"
+        pk            = f"skill{i}_power"
         display_power = analysis.get(pk, {}).get("match")
-        if display_power is None:
+        skill_match   = analysis[sk].get("match")
+        skill_score   = analysis[sk].get("score", 0)
+
+        if display_power is None or atk_stats is None:
+            results.append({"num": i, "name": skill_match or "—", "score": skill_score,
+                            "cat": "—", "power": None, "hits": 1, "reduce_pct": 0,
+                            "dmg": None, "pct_hp": None})
             continue
-        skill_match = analysis[sk].get("match")
+
         skill_data  = _find_skill(atk_sp, skill_match) if skill_match else None
         effect      = skill_data.get("效果", "") if skill_data else ""
         hits, reduce_pct = parse_skill_meta(effect)
 
         if skill_data and skill_data.get("类别") == "魔攻":
-            atk_val, def_val, cat = atk_stats["魔攻"], def_stats["魔防"], "魔"
+            atk_val, def_val, cat = atk_stats["魔攻"], def_stats["魔防"], "魔攻"
         else:
-            atk_val, def_val, cat = atk_stats["物攻"], def_stats["物防"], "物"
+            atk_val, def_val, cat = atk_stats["物攻"], def_stats["物防"], "物攻"
 
         dmg = math.floor(atk_val / def_val * 0.9 * display_power * hits * (1 - reduce_pct / 100))
         pct = dmg / def_hp * 100 if def_hp else 0
 
-        hit_s    = f"x{hits}连" if hits > 1 else ""
-        reduce_s = f"  减伤{reduce_pct:.0f}%" if reduce_pct else ""
-        name_s   = skill_match or "?"
-        lines.append(f"  技能{i} {name_s}  [{cat}攻]  威力={display_power}{hit_s}{reduce_s}"
-                     f"  ->  {dmg} ({pct:.1f}% HP)")
+        results.append({"num": i, "name": skill_match or "?", "score": skill_score,
+                        "cat": cat, "power": display_power, "hits": hits,
+                        "reduce_pct": reduce_pct, "dmg": dmg, "pct_hp": pct})
+    return results
 
+
+def _quick_damage(self_name: str, enemy_name: str, analysis: dict,
+                  skill_keys: list, db: dict) -> None:
+    """简易公式快速伤害估算：攻÷防×0.9×显示威力×连击×(1-减伤)。（打印版，保留向后兼容）"""
+    rows = calc_quick_damage(self_name, enemy_name, analysis, skill_keys, db)
+    lines = []
+    for r in rows:
+        if r["power"] is None:
+            continue
+        hit_s    = f"x{r['hits']}连" if r["hits"] > 1 else ""
+        reduce_s = f"  减伤{r['reduce_pct']:.0f}%" if r["reduce_pct"] else ""
+        lines.append(f"  技能{r['num']} {r['name']}  [{r['cat']}]  "
+                     f"威力={r['power']}{hit_s}{reduce_s}"
+                     f"  ->  {r['dmg']} ({r['pct_hp']:.1f}% HP)")
     if lines:
         print()
         print("  -- 简易伤害估算 (攻/防x0.9x威力x连击x(1-减伤%)) --")
