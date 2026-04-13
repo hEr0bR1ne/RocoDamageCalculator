@@ -122,25 +122,73 @@ def frame_diff(a: Image.Image, b: Image.Image) -> float:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# 战斗状态分类
+# ──────────────────────────────────────────────────────────────────────────────
+
+# 技能面板区域（左侧技能1～4所在列）
+_SKILL_PANEL_BOX   = (150, 380, 470, 500)
+_SKILL_PANEL_THRESH = 25.0   # std >= 25 → 有技能卡 → 出招阶段
+
+# "XXX使出了★x" 横幅区域
+_BANNER_BOX        = (1500, 220, 1780, 248)
+_BANNER_MEAN_THRESH = 60.0   # mean > 60 → 横幅亮起 → 招式释放阶段
+
+# 帧状态字符串
+STATE_SKILL_SELECT  = "skill_select"   # 出招阶段
+STATE_SKILL_RELEASE = "skill_release"  # 招式释放阶段
+STATE_OTHER         = "other"          # 其他（地图、过场等）
+
+
+def classify_frame(img: Image.Image) -> str:
+    """
+    分析截图，返回战斗状态字符串：
+      'skill_select'  — 出招阶段（左侧4个技能卡可见）
+      'skill_release' — 招式释放阶段（右侧"XXX使出了"横幅亮起）
+      'other'         — 其他画面（地图、过场动画等）
+
+    判断依据（1920×1080 截图）：
+      技能面板灰度 std >= 25       → skill_select
+      技能面板 std < 25 且横幅亮度 mean > 60 → skill_release
+      否则                       → other
+    """
+    arr_panel = np.asarray(
+        img.crop(_SKILL_PANEL_BOX).convert("L"), dtype=np.float32
+    )
+    if arr_panel.std() >= _SKILL_PANEL_THRESH:
+        return STATE_SKILL_SELECT
+
+    arr_banner = np.asarray(
+        img.crop(_BANNER_BOX).convert("L"), dtype=np.float32
+    )
+    if arr_banner.mean() > _BANNER_MEAN_THRESH:
+        return STATE_SKILL_RELEASE
+
+    return STATE_OTHER
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # GameWatcher 主类
 # ──────────────────────────────────────────────────────────────────────────────
 
 class GameWatcher:
     """
-    后台线程持续截图，帧差分超阈值时调用 on_change 回调。
+    后台线程持续截图，识别战斗阶段并分别回调。
 
     参数
     ----
-    on_change       : 回调函数，接收 PIL.Image.Image
+    on_change       : 出招阶段回调，接收 PIL.Image.Image（帧发生变化时触发）
+    on_release      : 招式释放阶段回调，接收 PIL.Image.Image（可选，None 则仅打印日志）
     window_title    : 游戏窗口标题（精确匹配），None 则截全屏
     poll_interval   : 截图间隔（秒）
     diff_threshold  : 触发阈值（平均像素差）
     cooldown        : 触发后冷却秒数
+    region          : 固定截图区域 {"left":x,"top":y,"width":w,"height":h}
     """
 
     def __init__(
         self,
         on_change: Callable[[Image.Image], None],
+        on_release: Callable[[Image.Image], None] | None = None,
         window_title: str | None = DEFAULT_TITLE,
         poll_interval: float = POLL_INTERVAL,
         diff_threshold: float = DIFF_THRESHOLD,
@@ -148,6 +196,7 @@ class GameWatcher:
         region: dict | None = None,
     ):
         self.on_change      = on_change
+        self.on_release     = on_release
         self.window_title   = window_title
         self.poll_interval  = poll_interval
         self.diff_threshold = diff_threshold
@@ -158,6 +207,7 @@ class GameWatcher:
         self._stop_event = threading.Event()
         self._last_frame: Image.Image | None = None
         self._last_trigger: float = 0.0
+        self._last_release_trigger: float = 0.0
 
         # status 供外部 UI 查询
         self.status: str = "idle"          # idle / watching / window_not_found
@@ -211,17 +261,50 @@ class GameWatcher:
 
                 self.status = "watching"
                 now = time.monotonic()
+
+                # ── 帧差检测 ──────────────────────────────────────────────
+                diff = 0.0
                 if self._last_frame is not None:
                     diff = frame_diff(self._last_frame, img)
-                    if diff >= self.diff_threshold:
-                        if now - self._last_trigger >= self.cooldown:
-                            self._last_trigger = now
-                            try:
-                                self.on_change(img.copy())
-                            except Exception as e:
-                                print(f"[capture] on_change error: {e}")
-
                 self._last_frame = img
+
+                if diff < self.diff_threshold and self._last_frame is not None:
+                    # 画面无明显变化，跳过分类
+                    time.sleep(self.poll_interval)
+                    continue
+
+                # ── 帧状态分类 ────────────────────────────────────────────
+                state = classify_frame(img)
+
+                if state == STATE_SKILL_SELECT:
+                    # 出招阶段：触发分析（受冷却控制）
+                    if now - self._last_trigger >= self.cooldown:
+                        self._last_trigger = now
+                        try:
+                            self.on_change(img.copy())
+                        except Exception as e:
+                            print(f"[capture] on_change error: {e}")
+
+                elif state == STATE_SKILL_RELEASE:
+                    # 招式释放阶段：保存截图并回调（受冷却控制）
+                    if now - self._last_release_trigger >= self.cooldown:
+                        self._last_release_trigger = now
+                        import os, datetime
+                        os.makedirs("sample", exist_ok=True)
+                        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                        path = os.path.join("sample", f"_release_{ts}.png")
+                        try:
+                            img.save(path)
+                            print(f"[capture] 招式释放阶段截图 → {path}")
+                        except Exception as e:
+                            print(f"[capture] save release error: {e}")
+                        if self.on_release is not None:
+                            try:
+                                self.on_release(img.copy())
+                            except Exception as e:
+                                print(f"[capture] on_release error: {e}")
+
+                # state == STATE_OTHER → 丢弃，不处理
 
             except Exception as e:
                 print(f"[capture] loop error: {e}")
