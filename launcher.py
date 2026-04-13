@@ -281,17 +281,11 @@ def action_analyzer_clipboard(card: ToolCard):
 
 def action_analyzer_watch(card: ToolCard):
     top = card.winfo_toplevel()
-    sw = top.winfo_screenwidth()   # 逻辑像素（已考虑 DPI 缩放）
-    sh = top.winfo_screenheight()
-    win_h = max(400, sh - 80)      # 留出任务栏空间
-    if sw > 1920:
-        # 宽屏：贴在游戏右侧
-        win_x = 1920
-        win_w = sw - 1920
-    else:
-        # 窄屏：右对齐，宽度取屏幕的 1/3（至少 360px）
-        win_w = max(360, sw // 3)
-        win_x = sw - win_w
+    # 以 1920×1080 为基准计算（远程桌面/DPI 缩放环境下 winfo_screen* 不可靠）
+    sw, sh = 1920, 1080
+    win_w = 640
+    win_x = sw - win_w          # 1280，覆盖游戏右侧 1/3
+    win_h = sh - 80             # 1000，留出任务栏
     out = OutputWindow(top, "对战截图分析器 — 自动监控",
                        geometry=f"{win_w}x{win_h}+{win_x}+0")
     args = ([sys.executable, "--tool", "analyzer-watch"] if _IS_FROZEN
