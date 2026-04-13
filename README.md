@@ -8,9 +8,19 @@
 [![Next.js](https://img.shields.io/badge/Next.js-15-000000?logo=next.js)](https://nextjs.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-精确计算竞技场伤害 · 截图 OCR 自动识别 · 支持桌面版与 Web 版
+精确计算竞技场伤害 · 截图 OCR 自动识别 · 实时战局监控 GUI · 支持桌面版与 Web 版
 
 </div>
+
+---
+
+## ⬇️ Download
+
+> 不想配置 Python 环境？直接下载打包好的 exe：
+
+**[RocoDamageCalculator-v0.0.3-windows.zip](https://github.com/hEr0bR1ne/RocoDamageCalculator/releases/download/v0.0.3/RocoDamageCalculator-v0.0.3-windows.zip)**（约 91 MB）
+
+解压后将 `RocoLauncher.exe` 与 `data/` 文件夹**放在同一目录**下运行即可，无需安装 Python。
 
 ---
 
@@ -22,6 +32,8 @@
 | 完整修正 | 技能威力、属性克制、本系补正、天气、减伤、攻防增减益 |
 | 特殊技能 | 内置部分应对技能的威力修正逻辑（如特定反制倍率） |
 | OCR 分析 | 对战截图自动识别我方 / 敌方精灵名与可用技能列表 |
+| **自动监控 GUI** | **WatchWindow 实时监控游戏窗口，4 张技能卡即时展示伤害估算与置信度着色** |
+| 帧状态分类 | 自动区分出招阶段 / 招式释放阶段 / 其他画面，过滤无效帧 |
 | 图形启动器 | 一键启动所有工具，实时显示运行输出 |
 | 数据爬取 | 从 Wiki 自动抓取精灵图鉴与技能图鉴，写入本地 `data/` |
 
@@ -75,7 +87,8 @@ RocoDamageCalculator/
 │   ├── data.py             # 数据加载
 │   ├── stats.py            # 属性计算
 │   ├── calculator.py       # 伤害计算 + 交互式 CLI
-│   ├── analyzer.py         # 截图 OCR 分析
+│   ├── analyzer.py         # 截图 OCR 分析 + calc_quick_damage()
+│   ├── capture.py          # 截图采集 + 帧分类器 + GameWatcher
 │   └── scraper/
 │       ├── spirits.py      # 精灵 Wiki 爬虫
 │       └── skills.py       # 技能 Wiki 爬虫
@@ -118,6 +131,8 @@ python skill_scraper.py   # 更新技能图鉴
 | `requests` · `beautifulsoup4` | Wiki 数据爬取 |
 | `rapidocr-onnxruntime` | 截图文字识别 |
 | `Pillow` | 图像处理 |
+| `mss` | DPI 感知截图（替代 BitBlt，解决截图全黑问题） |
+| `opencv-python` | 帧差分 + 图像预处理 |
 | `tkinter` | 桌面 GUI（标准库） |
 
 **Web**
@@ -156,6 +171,11 @@ $$
 - [x] 对战截图 OCR 分析
 - [x] 图形化工具启动器
 - [x] Next.js Web 版
+- [x] 后台截图监控 + 帧状态分类器
+- [x] WatchWindow 实时伤害监控 GUI
+- [x] Windows exe 打包发布
+- [ ] skill_release 帧伤害记录（截图已保存，分析逻辑待实现）
+- [ ] WatchWindow 多分辨率适配（当前按 2048×1152 标定）
 - [ ] 单元测试覆盖核心公式
 - [ ] 支持更多特殊技能判断
 - [ ] 自动化数据同步 CI / CD
@@ -191,4 +211,5 @@ $$
 
 - 爬虫依赖 Wiki 页面结构，若页面改版解析逻辑需同步更新
 - OCR 区域坐标基于 **2560×1440** 分辨率截图，其他分辨率需调整 `roco/analyzer.py` 中的 `REGION_2560`
+- WatchWindow 的窗口位置按 **2048×1152** 分辨率标定，其他分辨率下位置可能偏移（见 `launcher.py` 中 `_RX / _RW / _RH` 常量）
 - 仅使用桌面版不需要安装 Node.js；仅使用 Web 版不需要安装 Python 依赖，但 `data/` 中的 JSON 文件必须存在
