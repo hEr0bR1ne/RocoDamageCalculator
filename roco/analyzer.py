@@ -5,6 +5,7 @@ OCR 对战截图分析器
     python -m roco.analyzer --once <图片>  # 分析单张截图
 """
 import argparse
+import re
 import time
 from difflib import SequenceMatcher, get_close_matches
 from pathlib import Path
@@ -14,6 +15,7 @@ from PIL import Image
 from .constants import ALL_STATS
 from .data import DATA_PATH
 from .calculator import calculate
+from .stats import calc_all_stats as _calc_stats, find_skill as _find_skill
 
 # ── OCR 区域定义（归一化比例，适用于任意分辨率）───────────────────────────────
 # 格式：(left, top, right, bottom)，值为 0.0~1.0 相对比例
@@ -25,6 +27,11 @@ REGIONS_RATIO = {
     "skill2":     ( 250/2560, 680/1440,  540/2560,  835/1440),
     "skill3":     ( 250/2560, 845/1440,  540/2560, 1010/1440),
     "skill4":     ( 320/2560,1020/1440,  640/2560, 1210/1440),
+    # 技能卡上方的「显示威力」数字区域（位于技能名上方约 25px）
+    "skill1_power": ( 250/2560, 520/1440,  540/2560,  580/1440),
+    "skill2_power": ( 250/2560, 715/1440,  540/2560,  770/1440),
+    "skill3_power": ( 250/2560, 910/1440,  540/2560,  975/1440),
+    "skill4_power": ( 320/2560,1090/1440,  640/2560, 1155/1440),
 }
 
 # 自定义区域配置文件（OCR Demo 保存后自动加载）
@@ -50,7 +57,12 @@ def load_regions() -> tuple[dict, tuple]:
             regions = {k: tuple(v) for k, v in data.items()
                        if k in REGIONS_RATIO}
             game_area = tuple(data.get(_GAME_AREA_KEY, _DEFAULT_GAME_AREA))
-            if set(regions.keys()) == set(REGIONS_RATIO.keys()):
+            # 填充旧配置文件中缺少的新字段（如 skill*_power）
+            for k, v in REGIONS_RATIO.items():
+                if k not in regions:
+                    regions[k] = v
+            base_keys = {"self_name", "enemy_name", "skill1", "skill2", "skill3", "skill4"}
+            if base_keys.issubset(set(regions.keys())):
                 return regions, game_area
         except Exception:
             pass
@@ -130,7 +142,7 @@ def best_match(texts: list[str], candidates: list[str], min_score: float = 0.4) 
 def scale_regions(img_width: int, img_height: int,
                   regions_ratio: dict | None = None) -> dict:
     if regions_ratio is None:
-        regions_ratio = load_regions()
+        regions_ratio, _ = load_regions()
     return {
         k: (int(l * img_width),  int(t * img_height),
             int(r * img_width),  int(b * img_height))
@@ -155,11 +167,33 @@ def analyze_image(img: Image.Image, db: dict, spirit_names: list, skill_names: l
     regions = scale_regions(img.width, img.height, regions_ratio)
     result = {}
     for key, box in regions.items():
-        texts      = ocr_region(img, box)
-        candidates = spirit_names if "name" in key else skill_names
-        match, score = best_match(texts, candidates)
-        result[key] = {"match": match, "score": score, "raw": texts}
+        texts = ocr_region(img, box)
+        if key.endswith("_power"):
+            # 只提取数字，不做模糊匹配
+            num = None
+            for t in texts:
+                m = re.search(r'\d+', t)
+                if m:
+                    num = int(m.group())
+                    break
+            result[key] = {"match": num, "score": 1.0 if num is not None else 0.0, "raw": texts}
+        else:
+            candidates = spirit_names if "name" in key else skill_names
+            match, score = best_match(texts, candidates)
+            result[key] = {"match": match, "score": score, "raw": texts}
     return result
+
+
+def parse_skill_meta(effect: str) -> tuple[int, float]:
+    """从技能效果文本提取 (连击数, 减伤率%).
+    例：'造成物伤，3连击。' → (3, 0.0)
+         '减伤70%，应对攻击。' → (1, 70.0)
+    """
+    m = re.search(r'(\d+)连击', effect)
+    hits = int(m.group(1)) if m else 1
+    m = re.search(r'减伤(\d+)%', effect)
+    reduce_pct = float(m.group(1)) if m else 0.0
+    return hits, reduce_pct
 
 
 def find_skills_for_spirit(spirit_name: str, skill_keys: list[str], analysis: dict, db: dict) -> list[dict]:
@@ -222,7 +256,77 @@ def prompt_spirit_name(prompt: str, db: dict, spirit_names: list) -> str | None:
             return None
 
 
+def calc_quick_damage(self_name: str, enemy_name: str, analysis: dict,
+                      skill_keys: list, db: dict) -> list[dict]:
+    """
+    简易公式伤害估算，返回结构化列表供 GUI 显示。
+    每项：{num, name, score, cat, power, hits, reduce_pct, dmg, pct_hp}
+    power/dmg/pct_hp 为 None 表示无法估算。
+    """
+    import math
+    atk_sp = db.get(self_name, {})
+    def_sp = db.get(enemy_name, {})
+    results = []
+
+    atk_stats = def_stats = def_hp = None
+    if atk_sp and def_sp:
+        atk_stats = _calc_stats(atk_sp, DEFAULT_TALENT, DEFAULT_TALENT_STATS, DEFAULT_NATURE)
+        def_stats = _calc_stats(def_sp, DEFAULT_TALENT, DEFAULT_TALENT_STATS, DEFAULT_NATURE)
+        def_hp    = def_stats["生命"]
+
+    for i, sk in enumerate(skill_keys, 1):
+        pk            = f"skill{i}_power"
+        display_power = analysis.get(pk, {}).get("match")
+        skill_match   = analysis[sk].get("match")
+        skill_score   = analysis[sk].get("score", 0)
+
+        if display_power is None or atk_stats is None:
+            results.append({"num": i, "name": skill_match or "—", "score": skill_score,
+                            "cat": "—", "power": None, "hits": 1, "reduce_pct": 0,
+                            "dmg": None, "pct_hp": None})
+            continue
+
+        skill_data  = _find_skill(atk_sp, skill_match) if skill_match else None
+        effect      = skill_data.get("效果", "") if skill_data else ""
+        hits, reduce_pct = parse_skill_meta(effect)
+
+        if skill_data and skill_data.get("类别") == "魔攻":
+            atk_val, def_val, cat = atk_stats["魔攻"], def_stats["魔防"], "魔攻"
+        else:
+            atk_val, def_val, cat = atk_stats["物攻"], def_stats["物防"], "物攻"
+
+        dmg = math.floor(atk_val / def_val * 0.9 * display_power * hits * (1 - reduce_pct / 100))
+        pct = dmg / def_hp * 100 if def_hp else 0
+
+        results.append({"num": i, "name": skill_match or "?", "score": skill_score,
+                        "cat": cat, "power": display_power, "hits": hits,
+                        "reduce_pct": reduce_pct, "dmg": dmg, "pct_hp": pct})
+    return results
+
+
+def _quick_damage(self_name: str, enemy_name: str, analysis: dict,
+                  skill_keys: list, db: dict) -> None:
+    """简易公式快速伤害估算：攻÷防×0.9×显示威力×连击×(1-减伤)。（打印版，保留向后兼容）"""
+    rows = calc_quick_damage(self_name, enemy_name, analysis, skill_keys, db)
+    lines = []
+    for r in rows:
+        if r["power"] is None:
+            continue
+        hit_s    = f"x{r['hits']}连" if r["hits"] > 1 else ""
+        reduce_s = f"  减伤{r['reduce_pct']:.0f}%" if r["reduce_pct"] else ""
+        lines.append(f"  技能{r['num']} {r['name']}  [{r['cat']}]  "
+                     f"威力={r['power']}{hit_s}{reduce_s}"
+                     f"  ->  {r['dmg']} ({r['pct_hp']:.1f}% HP)")
+    if lines:
+        print()
+        print("  -- 简易伤害估算 (攻/防x0.9x威力x连击x(1-减伤%)) --")
+        for line in lines:
+            print(line)
+
+
 def print_analysis(analysis: dict, db: dict, spirit_names: list, interactive: bool = True) -> None:
+    # \x0c 通知 OutputWindow 清屏（监控模式每次新结果前刷新显示）
+    print("\x0c", end="", flush=True)
     print()
     print("=" * 60)
     print("  对战截图分析结果")
@@ -244,7 +348,7 @@ def print_analysis(analysis: dict, db: dict, spirit_names: list, interactive: bo
     skill_keys = ["skill1", "skill2", "skill3", "skill4"]
     for i, sk in enumerate(skill_keys, 1):
         info = analysis[sk]
-        tag  = "✓" if info["score"] >= 0.8 else ("?" if info["score"] >= 0.4 else "✗")
+        tag  = "√" if info["score"] >= 0.8 else ("?" if info["score"] >= 0.4 else "×")
         print(f"  技能{i} [{tag}] {info['match'] or '未识别':12s}  (置信度 {info['score']:.0%})  OCR: {info['raw']}")
 
     print()
@@ -281,6 +385,13 @@ def print_analysis(analysis: dict, db: dict, spirit_names: list, interactive: bo
 
     if not enemy_name:
         print("  未提供对方精灵名，跳过伤害计算。")
+        return
+
+    # ── 简易伤害估算（监控模式主要输出）────────────────────────
+    _quick_damage(self_name, enemy_name, analysis, skill_keys, db)
+
+    # ── 完整计算器（仅交互模式）─────────────────────────────────
+    if not interactive:
         return
 
     skills = find_skills_for_spirit(self_name, skill_keys, analysis, db)
@@ -327,6 +438,56 @@ def main_loop(db: dict, spirit_names: list, skill_names: list) -> None:
         time.sleep(1.5)
 
 
+def main_watch(db: dict, spirit_names: list, skill_names: list,
+               window_title: str | None, threshold: float,
+               region: dict | None = None) -> None:
+    """mss + 帧差分自动监控模式。"""
+    from .capture import GameWatcher
+
+    # 保存截图的目录
+    _save_dir = Path(__file__).parent.parent / "sample"
+    _save_dir.mkdir(exist_ok=True)
+    _save_path = _save_dir / "_last_capture.png"
+
+    def _on_change(img):
+        import traceback
+        print(f"\n  [自动截图] 检测到场面变化  {img.size[0]}×{img.size[1]}")
+        # 保存截图，方便调试
+        try:
+            img.save(_save_path)
+            print(f"  [debug]   截图已保存 → {_save_path}")
+        except Exception as e:
+            print(f"  [debug]   截图保存失败：{e}")
+        try:
+            analysis = analyze_image(img, db, spirit_names, skill_names)
+            print_analysis(analysis, db, spirit_names, interactive=False)
+        except Exception:
+            print(f"  [error] 分析失败，完整错误：")
+            traceback.print_exc()
+
+    watcher = GameWatcher(
+        on_change=_on_change,
+        window_title=window_title,
+        diff_threshold=threshold,
+        region=region,
+    )
+
+    if region:
+        loc_hint = f"固定区域 {region['left']},{region['top']}  {region['width']}×{region['height']}"
+    else:
+        loc_hint = f'窗口"{window_title}"' if window_title else "全屏"
+    print(f"自动监控模式  {loc_hint}  阈值={threshold}")
+    print("场面发生明显变化时自动触发分析，按 Ctrl+C 退出。\n")
+    watcher.start()
+    try:
+        while True:
+            time.sleep(0.5)
+            if watcher.status == "window_not_found":
+                print(f"  [capture] 未找到窗口 {loc_hint!r}，继续等待……", end="\r")
+    finally:
+        watcher.stop()
+
+
 def main_once(path: str, db: dict, spirit_names: list, skill_names: list) -> None:
     img = Image.open(path)
     print(f"分析图片：{path}  ({img.size[0]}×{img.size[1]})")
@@ -336,7 +497,14 @@ def main_once(path: str, db: dict, spirit_names: list, skill_names: list) -> Non
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="洛克王国对战截图分析器")
-    parser.add_argument("--once", metavar="IMAGE", help="分析单张截图后退出")
+    parser.add_argument("--once",      metavar="IMAGE",  help="分析单张截图后退出")
+    parser.add_argument("--watch",     action="store_true", help="自动监控游戏窗口（mss + 帧差分）")
+    parser.add_argument("--window",    metavar="TITLE",  default="洛克王国：世界",
+                        help="游戏窗口标题（--watch 模式用）")
+    parser.add_argument("--threshold", metavar="N",      type=float, default=8.0,
+                        help="帧差分触发阈值，默认 8.0")
+    parser.add_argument("--region",    metavar="L,T,W,H",
+                        help="固定截图区域，格式：left,top,width,height（如 0,0,1920,1080）")
     args = parser.parse_args()
 
     print("加载精灵数据库……")
@@ -345,6 +513,18 @@ def main() -> None:
 
     if args.once:
         main_once(args.once, db, spirit_names, skill_names)
+    elif args.watch:
+        _region = None
+        if args.region:
+            try:
+                l, t, w, h = [int(x) for x in args.region.split(",")]
+                _region = {"left": l, "top": t, "width": w, "height": h}
+            except ValueError:
+                print(f"[warn] --region 格式无效（应为 L,T,W,H），忽略")
+        main_watch(db, spirit_names, skill_names,
+                   window_title=args.window or None,
+                   threshold=args.threshold,
+                   region=_region)
     else:
         main_loop(db, spirit_names, skill_names)
 

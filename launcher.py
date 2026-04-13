@@ -12,6 +12,21 @@ from tkinter import scrolledtext
 _IS_FROZEN = getattr(sys, "frozen", False)
 
 
+def _pick_cjk_font() -> tuple[str, int]:
+    """选一个系统中支持中文的等宽/近等宽字体，找不到则退回 Consolas。"""
+    from tkinter import font as _tkfont
+    import tkinter as _tk
+    _r = _tk.Tk(); _r.withdraw()
+    available = set(_tkfont.families())
+    _r.destroy()
+    for name in ("Noto Sans Mono CJK SC", "Sarasa Mono SC", "Cascadia Code",
+                 "Microsoft YaHei Mono", "Noto Sans SC",
+                 "Microsoft YaHei UI", "Microsoft JhengHei UI", "Consolas"):
+        if name in available:
+            return (name, 9)
+    return ("TkFixedFont", 9)
+
+
 def _tool_dispatch() -> None:
     """
     打包为 exe 后，以 RocoLauncher.exe --tool <name> [args...] 方式启动时，
@@ -32,6 +47,16 @@ def _tool_dispatch() -> None:
         app.mainloop()
 
     elif tool == "analyzer":
+        from roco.analyzer import main as _main
+        try:
+            _main()
+        except KeyboardInterrupt:
+            pass
+
+    elif tool == "analyzer-watch":
+        import sys as _s
+        _s.argv = [_s.argv[0], "--watch", "--window", "洛克王国：世界",
+                   "--region", "0,40,1920,1080"]
         from roco.analyzer import main as _main
         try:
             _main()
@@ -169,31 +194,347 @@ class ToolCard(tk.Frame):
 class OutputWindow(tk.Toplevel):
     """悬浮输出窗口，显示子进程的 stdout/stderr。"""
 
-    def __init__(self, parent, title: str):
+    # ── 文字着色规则（前缀匹配，优先级从高到低）──────────────────────────────
+    _TAG_RULES: list[tuple[str, str, dict]] = [
+        # (匹配串, tag名, tag配置)
+        ("=",   "header",  {"foreground": ACCENT,  "font": ("", 10, "bold")}),
+        ("─",   "sep",     {"foreground": BORDER}),
+        ("  己方精灵", "self_lbl", {"foreground": SUBTEXT}),
+        ("  对方精灵", "emy_lbl",  {"foreground": SUBTEXT}),
+        (" [√]","ok",      {"foreground": GREEN}),
+        (" [?]","warn",    {"foreground": YELLOW}),
+        (" [×]","err",     {"foreground": RED}),
+        (" ->", "result",  {"foreground": ORANGE, "font": ("", 10, "bold")}),
+        ("  ->","result",  {"foreground": ORANGE, "font": ("", 10, "bold")}),
+        ("  [自动","info", {"foreground": SUBTEXT}),
+        ("  [error","errmsg",{"foreground": RED}),
+        ("  [capture","cap",{"foreground": SUBTEXT}),
+    ]
+
+    def __init__(self, parent, title: str, geometry: str | None = None):
         super().__init__(parent)
         self.title(title)
         self.configure(bg=BG)
-        self.geometry("760x420")
+        self.geometry(geometry or "760x420")
         self.resizable(True, True)
 
+        # ── 标题栏 ────────────────────────────────────────────────────────────
+        hdr = tk.Frame(self, bg=ACCENT, height=28)
+        hdr.pack(fill="x", side="top")
+        hdr.pack_propagate(False)
+
+        tk.Label(hdr, text=title, bg=ACCENT, fg="white",
+                 font=("微软雅黑", 9, "bold"), anchor="w",
+                 padx=10).pack(side="left", fill="y")
+
+        tk.Button(hdr, text="✕", bg=ACCENT, fg="white", relief="flat",
+                  font=("微软雅黑", 10), padx=8, pady=0, cursor="hand2",
+                  activebackground=RED, activeforeground="white",
+                  command=self.destroy).pack(side="right", fill="y")
+
+        # ── 文本区 ────────────────────────────────────────────────────────────
+        _fname, _fsize = _pick_cjk_font()
+        _font_normal = (_fname, 10)
+
         self.text = scrolledtext.ScrolledText(
-            self, bg="#11111b", fg=TEXT, font=("Consolas", 9),
+            self, bg="#11111b", fg=TEXT, font=_font_normal,
             insertbackground=TEXT, relief="flat", borderwidth=0,
-            wrap="word",
+            wrap="word", padx=8, pady=6,
+            selectbackground=ACCENT, selectforeground="white",
         )
-        self.text.pack(fill="both", expand=True, padx=6, pady=6)
+        self.text.pack(fill="both", expand=True, padx=0, pady=0)
+        self.text.config(state="disabled")
+
+        # 注册着色 tag
+        for _, tag, cfg in self._TAG_RULES:
+            full = dict(cfg)
+            if "font" in full:
+                fn, fs, *fw = full["font"]
+                full["font"] = (_fname if fn == "" else fn, fs, *fw)
+            self.text.tag_configure(tag, **full)
+
+    def clear(self):
+        self.text.config(state="normal")
+        self.text.delete("1.0", "end")
         self.text.config(state="disabled")
 
     def append(self, line: str):
+        # \x0c (form-feed) 是清屏哨兵
+        if "\x0c" in line:
+            self.clear()
+            line = line.replace("\x0c", "")
+            if not line:
+                return
+
+        # 选择着色 tag
+        tag = None
+        stripped = line.rstrip("\n")
+        for prefix, t, _ in self._TAG_RULES:
+            if stripped.startswith(prefix) or stripped.lstrip().startswith(prefix.lstrip()):
+                tag = t
+                break
+
         self.text.config(state="normal")
-        self.text.insert("end", line)
+        if tag:
+            self.text.insert("end", line, tag)
+        else:
+            self.text.insert("end", line)
         self.text.see("end")
         self.text.config(state="disabled")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 自动监控 GUI 窗口
+# ─────────────────────────────────────────────────────────────────────────────
+
+class WatchWindow(tk.Toplevel):
+    """
+    自动监控专用悬浮窗：进程内直接运行 GameWatcher，结果以卡片形式展示。
+    无需子进程/stdout解析，结果完全结构化、可交互。
+    """
+
+    _SCORE_COLOR = [
+        (0.8, GREEN),
+        (0.4, YELLOW),
+        (0.0, RED),
+    ]
+
+    def __init__(self, parent, card: "ToolCard"):
+        super().__init__(parent)
+        self._card    = card
+        self._watcher = None
+        self._db = self._spirit_names = self._skill_names = None
+
+        self.title("对战分析 — 自动监控")
+        self.configure(bg=BG)
+        self.resizable(True, True)
+        self._set_geometry()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        self._build_ui()
+        threading.Thread(target=self._load_db, daemon=True).start()
+
+    def _set_geometry(self):
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        win_x = int(sw * 1525 / 2048)
+        win_w = int(sw * 440  / 2048)
+        win_h = int(sh * 870  / 1152)
+        self.geometry(f"{win_w}x{win_h}+{win_x}+0")
+
+    def _build_ui(self):
+        fn, _ = _pick_cjk_font()
+
+        def F(size, bold=False):
+            return (fn, size, "bold") if bold else (fn, size)
+
+        # ── 顶栏 ─────────────────────────────────────────────────────────────
+        hdr = tk.Frame(self, bg=ACCENT, height=48)
+        hdr.pack(fill="x")
+        hdr.pack_propagate(False)
+        tk.Label(hdr, text="⚔  对战分析  自动监控", bg=ACCENT, fg="white",
+                 font=F(20, True), anchor="w", padx=10).pack(side="left", fill="y")
+        self._status_dot = tk.Label(hdr, text="● 等待中", bg=ACCENT, fg="white",
+                                    font=F(16), padx=6)
+        self._status_dot.pack(side="left", fill="y")
+        tk.Button(hdr, text="✕", bg=ACCENT, fg="white", relief="flat",
+                  font=F(18), padx=10, cursor="hand2",
+                  activebackground=RED, activeforeground="white",
+                  command=self._on_close).pack(side="right", fill="y")
+
+        # ── 精灵信息行 ────────────────────────────────────────────────────────
+        spirit_row = tk.Frame(self, bg=PANEL, pady=8)
+        spirit_row.pack(fill="x", padx=8, pady=(6, 0))
+        self._self_var  = tk.StringVar(value="己方：—")
+        self._enemy_var = tk.StringVar(value="对方：—")
+        tk.Label(spirit_row, textvariable=self._self_var,
+                 bg=PANEL, fg=GREEN, font=F(22, True)).pack(side="left", padx=8)
+        tk.Label(spirit_row, textvariable=self._enemy_var,
+                 bg=PANEL, fg=RED,   font=F(22, True)).pack(side="left", padx=8)
+
+        # ── 技能卡区域 ────────────────────────────────────────────────────────
+        skills_frame = tk.Frame(self, bg=BG)
+        skills_frame.pack(fill="both", expand=True, padx=8, pady=6)
+        skills_frame.columnconfigure(0, weight=1)
+
+        self._skill_cards: list[dict] = []
+        for i in range(4):
+            skills_frame.rowconfigure(i, weight=1)
+            cf = tk.Frame(skills_frame, bg=PANEL,
+                          highlightthickness=1, highlightbackground=BORDER)
+            cf.grid(row=i, column=0, sticky="nsew", pady=2)
+
+            top_row = tk.Frame(cf, bg=PANEL)
+            top_row.pack(fill="x", padx=10, pady=(6, 2))
+
+            tk.Label(top_row, text=f"技能 {i+1}",
+                     bg=PANEL, fg=SUBTEXT, font=F(20, True)).pack(side="left")
+
+            name_var = tk.StringVar(value="—")
+            name_lbl = tk.Label(top_row, textvariable=name_var,
+                                bg=PANEL, fg=TEXT, font=F(14))
+            name_lbl.pack(side="left", padx=(6, 0))
+
+            cat_var = tk.StringVar(value="")
+            tk.Label(top_row, textvariable=cat_var,
+                     bg=PANEL, fg=SUBTEXT, font=F(14)).pack(side="left", padx=(6, 0))
+
+            conf_var = tk.StringVar(value="")
+            tk.Label(top_row, textvariable=conf_var,
+                     bg=PANEL, fg=SUBTEXT, font=F(14)).pack(side="right")
+
+            dmg_row = tk.Frame(cf, bg=PANEL)
+            dmg_row.pack(fill="x", padx=10, pady=(0, 6))
+
+            dmg_var = tk.StringVar(value="")
+            tk.Label(dmg_row, textvariable=dmg_var,
+                     bg=PANEL, fg=ORANGE, font=F(32, True)).pack(side="left")
+
+            pct_var = tk.StringVar(value="")
+            tk.Label(dmg_row, textvariable=pct_var,
+                     bg=PANEL, fg=YELLOW, font=F(18)).pack(side="left", padx=(8, 0))
+
+            meta_var = tk.StringVar(value="")
+            tk.Label(dmg_row, textvariable=meta_var,
+                     bg=PANEL, fg=SUBTEXT, font=F(14)).pack(side="right")
+
+            self._skill_cards.append({
+                "name": name_var, "name_lbl": name_lbl,
+                "cat": cat_var,   "conf": conf_var,
+                "dmg": dmg_var,   "pct": pct_var,  "meta": meta_var,
+            })
+
+        # ── 底部日志栏 ────────────────────────────────────────────────────────
+        self._log = tk.Text(self, bg="#11111b", fg=SUBTEXT, font=(fn, 14),
+                            height=3, relief="flat", state="disabled",
+                            wrap="word", padx=6, pady=4)
+        self._log.pack(fill="x")
+
+    # ── 数据库加载 ────────────────────────────────────────────────────────────
+
+    def _load_db(self):
+        try:
+            self._log_append("正在加载精灵数据库…")
+            from roco.analyzer import load_db, analyze_image, best_match, calc_quick_damage
+            self._db, self._spirit_names, self._skill_names = load_db()
+            self._analyze_image = analyze_image
+            self._best_match    = best_match
+            self._calc_quick    = calc_quick_damage
+            self._log_append(f"已加载 {len(self._db)} 只精灵，开始监控…")
+            self.after(0, self._start_watcher)
+        except Exception as e:
+            self._log_append(f"[错误] 数据库加载失败：{e}")
+
+    def _start_watcher(self):
+        from roco.capture import GameWatcher
+        self._watcher = GameWatcher(
+            on_change=self._on_frame,
+            window_title="洛克王国：世界",
+            region={"left": 0, "top": 40, "width": 1920, "height": 1080},
+        )
+        self._watcher.start()
+        self._card.set_running(True)
+        self._poll_status()
+
+    # ── 帧回调（后台线程）────────────────────────────────────────────────────
+
+    def _on_frame(self, img):
+        if self._db is None:
+            return
+        try:
+            skill_keys = ["skill1", "skill2", "skill3", "skill4"]
+            analysis = self._analyze_image(
+                img, self._db, self._spirit_names, self._skill_names)
+
+            self_name  = analysis["self_name"]["match"] or "未识别"
+            raw_enemy  = analysis["enemy_name"]["raw"]
+            enemy_name, enemy_score = self._best_match(raw_enemy, self._spirit_names)
+            if enemy_score < 0.7:
+                enemy_name = None
+            enemy_display = enemy_name or ("、".join(raw_enemy) or "未识别")
+
+            rows = self._calc_quick(
+                self_name, enemy_name or "", analysis, skill_keys, self._db)
+
+            self.after(0, lambda sn=self_name, en=enemy_display, rw=rows:
+                       self._update_ui(sn, en, rw))
+        except Exception as e:
+            import traceback
+            self._log_append(f"[错误] {e}\n{traceback.format_exc()}")
+
+    # ── UI 更新（主线程）─────────────────────────────────────────────────────
+
+    def _update_ui(self, self_name: str, enemy_name: str, rows: list):
+        self._self_var.set(f"⚔ {self_name}")
+        self._enemy_var.set(f"🛡 {enemy_name}")
+
+        for r, c in zip(rows, self._skill_cards):
+            score = r.get("score", 0)
+            color = next(col for thr, col in self._SCORE_COLOR if score >= thr)
+            c["name"].set(r["name"])
+            c["name_lbl"].config(fg=color)
+            c["conf"].set(f"{score:.0%}")
+            c["cat"].set(r["cat"])
+
+            if r["dmg"] is not None:
+                c["dmg"].set(str(r["dmg"]))
+                c["pct"].set(f"{r['pct_hp']:.1f}% HP")
+                meta = []
+                if r["power"]:       meta.append(f"威力 {r['power']}")
+                if r["hits"] > 1:    meta.append(f"{r['hits']}连击")
+                if r["reduce_pct"]:  meta.append(f"减伤{r['reduce_pct']:.0f}%")
+                c["meta"].set("  ".join(meta))
+            else:
+                c["dmg"].set("—")
+                c["pct"].set("")
+                c["meta"].set("")
+
+        ts = __import__("datetime").datetime.now().strftime("%H:%M:%S")
+        self._log_append(f"[{ts}] {self_name} vs {enemy_name}")
+
+    # ── 状态轮询 ──────────────────────────────────────────────────────────────
+
+    def _poll_status(self):
+        if self._watcher is None:
+            return
+        dot, col = {
+            "watching":         ("● 监控中",    GREEN),
+            "window_not_found": ("● 未找到窗口", YELLOW),
+            "idle":             ("● 已停止",    SUBTEXT),
+        }.get(self._watcher.status, ("● …", SUBTEXT))
+        self._status_dot.config(text=dot, fg=col)
+        self.after(1000, self._poll_status)
+
+    # ── 日志 ──────────────────────────────────────────────────────────────────
+
+    def _log_append(self, msg: str):
+        def _do():
+            self._log.config(state="normal")
+            self._log.insert("end", msg.rstrip("\n") + "\n")
+            self._log.see("end")
+            lines = int(self._log.index("end-1c").split(".")[0])
+            if lines > 50:
+                self._log.delete("1.0", f"{lines-50}.0")
+            self._log.config(state="disabled")
+        self.after(0, _do)
+
+    # ── 关闭 ──────────────────────────────────────────────────────────────────
+
+    def _on_close(self):
+        if self._watcher:
+            self._watcher.stop()
+            self._watcher = None
+        self._card.set_running(False)
+        self.destroy()
 
 
 def _launch_subprocess(card: ToolCard, args: list[str],
                        out_win: OutputWindow | None = None):
     """启动子进程并监视；如有 out_win 则实时输出到其中。"""
+    import os
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
     proc = subprocess.Popen(
         args,
         stdout=subprocess.PIPE if out_win else subprocess.DEVNULL,
@@ -201,6 +542,7 @@ def _launch_subprocess(card: ToolCard, args: list[str],
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=env,
         cwd=ROOT,
     )
     card.watch_proc(proc)
@@ -235,6 +577,10 @@ def action_analyzer_clipboard(card: ToolCard):
     args = ([sys.executable, "--tool", "analyzer"] if _IS_FROZEN
             else [PYTHON, str(ROOT / "battle_analyzer.py")])
     _launch_subprocess(card, args, out)
+
+
+def action_analyzer_watch(card: ToolCard):
+    WatchWindow(card.winfo_toplevel(), card)
 
 
 def action_analyzer_once(card: ToolCard):
@@ -300,9 +646,12 @@ class Launcher(tk.Tk):
             ("图形计算器",
              "可视化伤害计算界面，支持双方精灵、技能、天气、Buff 等参数。",
              action_gui, "启动 GUI", ACCENT),
+            ("截图分析 — 自动监控",
+             "自动检测游戏窗口画面变化，场面切换时立即 OCR 分析，无需手动截图。",
+             action_analyzer_watch, "开始监控", GREEN),
             ("截图分析 — 剪切板监听",
              "截图后复制到剪切板，自动 OCR 识别双方精灵和技能并计算伤害。",
-             action_analyzer_clipboard, "开始监听", GREEN),
+             action_analyzer_clipboard, "开始监听", ACCENT),
             ("截图分析 — 选择图片",
              "打开文件选择器，分析指定截图文件。",
              action_analyzer_once, "选择图片", YELLOW),
