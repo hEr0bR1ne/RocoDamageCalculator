@@ -5,4 +5,5 @@ rapidocr-onnxruntime
 opencv-python-headless
 numpy
 pyperclip
+pywin32
 mss
