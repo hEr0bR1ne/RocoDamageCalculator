@@ -244,7 +244,7 @@ def print_analysis(analysis: dict, db: dict, spirit_names: list, interactive: bo
     skill_keys = ["skill1", "skill2", "skill3", "skill4"]
     for i, sk in enumerate(skill_keys, 1):
         info = analysis[sk]
-        tag  = "✓" if info["score"] >= 0.8 else ("?" if info["score"] >= 0.4 else "✗")
+        tag  = "√" if info["score"] >= 0.8 else ("?" if info["score"] >= 0.4 else "×")
         print(f"  技能{i} [{tag}] {info['match'] or '未识别':12s}  (置信度 {info['score']:.0%})  OCR: {info['raw']}")
 
     print()
@@ -333,13 +333,26 @@ def main_watch(db: dict, spirit_names: list, skill_names: list,
     """mss + 帧差分自动监控模式。"""
     from .capture import GameWatcher
 
+    # 保存截图的目录
+    _save_dir = Path(__file__).parent.parent / "sample"
+    _save_dir.mkdir(exist_ok=True)
+    _save_path = _save_dir / "_last_capture.png"
+
     def _on_change(img):
+        import traceback
         print(f"\n  [自动截图] 检测到场面变化  {img.size[0]}×{img.size[1]}")
+        # 保存截图，方便调试
+        try:
+            img.save(_save_path)
+            print(f"  [debug]   截图已保存 → {_save_path}")
+        except Exception as e:
+            print(f"  [debug]   截图保存失败：{e}")
         try:
             analysis = analyze_image(img, db, spirit_names, skill_names)
             print_analysis(analysis, db, spirit_names, interactive=False)
-        except Exception as e:
-            print(f"  [error] 分析失败：{e}")
+        except Exception:
+            print(f"  [error] 分析失败，完整错误：")
+            traceback.print_exc()
 
     watcher = GameWatcher(
         on_change=_on_change,

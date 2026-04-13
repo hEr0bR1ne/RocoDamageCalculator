@@ -110,18 +110,18 @@ def calculate(
     atk_spd = atk_stats["速度"]
     def_spd = def_stats["速度"]
     if atk_spd > def_spd:
-        speed_result = f"先手 ✓  ({atk_spd} > {def_spd})"
+        speed_result = f"先手 √  ({atk_spd} > {def_spd})"
     elif atk_spd < def_spd:
-        speed_result = f"后手 ✗  ({atk_spd} < {def_spd}，差{def_spd - atk_spd}点)"
+        speed_result = f"后手 ×  ({atk_spd} < {def_spd}，差{def_spd - atk_spd}点)"
     else:
         speed_result = f"同速 (均为{atk_spd}，随机决定)"
 
     energy_note = ""
     if current_energy >= 0:
         if current_energy >= skill_cost:
-            energy_note = f"✓ 可释放 (当前{current_energy}，消耗{skill_cost}，剩余{current_energy - skill_cost})"
+            energy_note = f"√ 可释放 (当前{current_energy}，消耗{skill_cost}，剩余{current_energy - skill_cost})"
         else:
-            energy_note = f"✗ 能量不足 (当前{current_energy}，需要{skill_cost})"
+            energy_note = f"× 能量不足 (当前{current_energy}，需要{skill_cost})"
 
     W = 58
     atk_attrs = atk_spirit.get("属性", "")
