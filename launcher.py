@@ -12,6 +12,21 @@ from tkinter import scrolledtext
 _IS_FROZEN = getattr(sys, "frozen", False)
 
 
+def _pick_cjk_font() -> tuple[str, int]:
+    """选一个系统中支持中文的等宽/近等宽字体，找不到则退回 Consolas。"""
+    from tkinter import font as _tkfont
+    import tkinter as _tk
+    _r = _tk.Tk(); _r.withdraw()
+    available = set(_tkfont.families())
+    _r.destroy()
+    for name in ("Noto Sans Mono CJK SC", "Sarasa Mono SC", "Cascadia Code",
+                 "Microsoft YaHei Mono", "Noto Sans SC",
+                 "Microsoft YaHei UI", "Microsoft JhengHei UI", "Consolas"):
+        if name in available:
+            return (name, 9)
+    return ("TkFixedFont", 9)
+
+
 def _tool_dispatch() -> None:
     """
     打包为 exe 后，以 RocoLauncher.exe --tool <name> [args...] 方式启动时，
@@ -40,7 +55,8 @@ def _tool_dispatch() -> None:
 
     elif tool == "analyzer-watch":
         import sys as _s
-        _s.argv = [_s.argv[0], "--watch"]
+        _s.argv = [_s.argv[0], "--watch", "--window", "洛克王国：世界",
+                   "--region", "0,0,1920,1080"]
         from roco.analyzer import main as _main
         try:
             _main()
@@ -185,8 +201,9 @@ class OutputWindow(tk.Toplevel):
         self.geometry("760x420")
         self.resizable(True, True)
 
+        _font = _pick_cjk_font()
         self.text = scrolledtext.ScrolledText(
-            self, bg="#11111b", fg=TEXT, font=("Consolas", 9),
+            self, bg="#11111b", fg=TEXT, font=_font,
             insertbackground=TEXT, relief="flat", borderwidth=0,
             wrap="word",
         )
@@ -203,6 +220,10 @@ class OutputWindow(tk.Toplevel):
 def _launch_subprocess(card: ToolCard, args: list[str],
                        out_win: OutputWindow | None = None):
     """启动子进程并监视；如有 out_win 则实时输出到其中。"""
+    import os
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
     proc = subprocess.Popen(
         args,
         stdout=subprocess.PIPE if out_win else subprocess.DEVNULL,
@@ -210,6 +231,7 @@ def _launch_subprocess(card: ToolCard, args: list[str],
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=env,
         cwd=ROOT,
     )
     card.watch_proc(proc)
@@ -249,7 +271,9 @@ def action_analyzer_clipboard(card: ToolCard):
 def action_analyzer_watch(card: ToolCard):
     out = OutputWindow(card.winfo_toplevel(), "对战截图分析器 — 自动监控")
     args = ([sys.executable, "--tool", "analyzer-watch"] if _IS_FROZEN
-            else [PYTHON, str(ROOT / "battle_analyzer.py"), "--watch"])
+            else [PYTHON, "-u", "-X", "utf8", str(ROOT / "battle_analyzer.py"),
+                  "--watch", "--window", "洛克王国：世界",
+                  "--region", "0,0,1920,1080"])
     _launch_subprocess(card, args, out)
 
 

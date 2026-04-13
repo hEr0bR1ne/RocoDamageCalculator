@@ -328,7 +328,8 @@ def main_loop(db: dict, spirit_names: list, skill_names: list) -> None:
 
 
 def main_watch(db: dict, spirit_names: list, skill_names: list,
-               window_title: str | None, threshold: float) -> None:
+               window_title: str | None, threshold: float,
+               region: dict | None = None) -> None:
     """mss + 帧差分自动监控模式。"""
     from .capture import GameWatcher
 
@@ -344,17 +345,21 @@ def main_watch(db: dict, spirit_names: list, skill_names: list,
         on_change=_on_change,
         window_title=window_title,
         diff_threshold=threshold,
+        region=region,
     )
 
-    title_hint = f'"{window_title}"' if window_title else "全屏"
-    print(f"自动监控模式  目标窗口={title_hint}  阈值={threshold}")
+    if region:
+        loc_hint = f"固定区域 {region['left']},{region['top']}  {region['width']}×{region['height']}"
+    else:
+        loc_hint = f'窗口"{window_title}"' if window_title else "全屏"
+    print(f"自动监控模式  {loc_hint}  阈值={threshold}")
     print("场面发生明显变化时自动触发分析，按 Ctrl+C 退出。\n")
     watcher.start()
     try:
         while True:
             time.sleep(0.5)
             if watcher.status == "window_not_found":
-                print(f"  [capture] 未找到窗口 {title_hint!r}，继续等待……", end="\r")
+                print(f"  [capture] 未找到窗口 {loc_hint!r}，继续等待……", end="\r")
     finally:
         watcher.stop()
 
@@ -370,10 +375,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="洛克王国对战截图分析器")
     parser.add_argument("--once",      metavar="IMAGE",  help="分析单张截图后退出")
     parser.add_argument("--watch",     action="store_true", help="自动监控游戏窗口（mss + 帧差分）")
-    parser.add_argument("--window",    metavar="TITLE",  default="洛克王国",
+    parser.add_argument("--window",    metavar="TITLE",  default="洛克王国：世界",
                         help="游戏窗口标题（--watch 模式用）")
     parser.add_argument("--threshold", metavar="N",      type=float, default=8.0,
                         help="帧差分触发阈值，默认 8.0")
+    parser.add_argument("--region",    metavar="L,T,W,H",
+                        help="固定截图区域，格式：left,top,width,height（如 0,0,1920,1080）")
     args = parser.parse_args()
 
     print("加载精灵数据库……")
@@ -383,9 +390,17 @@ def main() -> None:
     if args.once:
         main_once(args.once, db, spirit_names, skill_names)
     elif args.watch:
+        _region = None
+        if args.region:
+            try:
+                l, t, w, h = [int(x) for x in args.region.split(",")]
+                _region = {"left": l, "top": t, "width": w, "height": h}
+            except ValueError:
+                print(f"[warn] --region 格式无效（应为 L,T,W,H），忽略")
         main_watch(db, spirit_names, skill_names,
                    window_title=args.window or None,
-                   threshold=args.threshold)
+                   threshold=args.threshold,
+                   region=_region)
     else:
         main_loop(db, spirit_names, skill_names)
 

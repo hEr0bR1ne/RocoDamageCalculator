@@ -15,14 +15,24 @@ roco/capture.py — 游戏窗口自动截图模块
 import threading
 import time
 from typing import Callable
+import ctypes
 
 import numpy as np
 from PIL import Image
 
+# DPI 感知：让 win32gui 返回物理像素坐标，与 mss 对齐
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)   # Per-Monitor DPI aware
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()       # 回退：System DPI aware
+    except Exception:
+        pass
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 常量
 # ──────────────────────────────────────────────────────────────────────────────
-DEFAULT_TITLE      = "洛克王国"
+DEFAULT_TITLE      = "洛克王国：世界"
 POLL_INTERVAL      = 0.3   # 截图间隔（秒）
 DIFF_THRESHOLD     = 8.0   # 平均像素差阈值（0-255），超过则认为场面发生变化
 COOLDOWN           = 2.0   # 触发分析后的冷却秒数，防止同一回合重复触发
@@ -62,34 +72,18 @@ def list_windows() -> list[tuple[int, str]]:
 
 def grab_window(hwnd: int) -> Image.Image | None:
     """
-    用 win32gui BitBlt 抓取指定窗口（即使被遮挡也有效）。
+    用 mss 截取指定窗口的客户区屏幕坐标区域（物理像素）。
+    游戏须在屏幕可见范围内（支持被其他窗口部分遮挡，但不支持最小化）。
     失败时返回 None。
     """
     try:
-        import win32gui, win32ui, win32con
+        import win32gui
+        cx, cy = win32gui.ClientToScreen(hwnd, (0, 0))
         left, top, right, bottom = win32gui.GetClientRect(hwnd)
         w, h = right - left, bottom - top
         if w <= 0 or h <= 0:
             return None
-
-        hwnd_dc   = win32gui.GetWindowDC(hwnd)
-        mfc_dc    = win32ui.CreateDCFromHandle(hwnd_dc)
-        save_dc   = mfc_dc.CreateCompatibleDC()
-        bmp       = win32ui.CreateBitmap()
-        bmp.CreateCompatibleBitmap(mfc_dc, w, h)
-        save_dc.SelectObject(bmp)
-        save_dc.BitBlt((0, 0), (w, h), mfc_dc, (0, 0), win32con.SRCCOPY)
-
-        bmp_info = bmp.GetInfo()
-        raw = bmp.GetBitmapBits(True)
-        img = Image.frombuffer("RGB", (bmp_info["bmWidth"], bmp_info["bmHeight"]),
-                               raw, "raw", "BGRX", 0, 1)
-
-        win32gui.DeleteObject(bmp.GetHandle())
-        save_dc.DeleteDC()
-        mfc_dc.DeleteDC()
-        win32gui.ReleaseDC(hwnd, hwnd_dc)
-        return img
+        return grab_screen_region({"left": cx, "top": cy, "width": w, "height": h})
     except Exception:
         return None
 
@@ -151,12 +145,14 @@ class GameWatcher:
         poll_interval: float = POLL_INTERVAL,
         diff_threshold: float = DIFF_THRESHOLD,
         cooldown: float = COOLDOWN,
+        region: dict | None = None,
     ):
         self.on_change      = on_change
         self.window_title   = window_title
         self.poll_interval  = poll_interval
         self.diff_threshold = diff_threshold
         self.cooldown       = cooldown
+        self.region         = region   # 固定截图区域 {"left":x,"top":y,"width":w,"height":h}
 
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
@@ -188,7 +184,11 @@ class GameWatcher:
     # ── 内部循环 ──────────────────────────────────────────────────────────────
 
     def _grab(self) -> Image.Image | None:
-        """抓一帧：优先 win32gui 窗口抓图，回退到 mss 全屏。"""
+        """抓一帧：优先固定区域，其次窗口坐标，最后全屏。"""
+        # 上来有固定区域，直接用
+        if self.region:
+            return grab_screen_region(self.region)
+
         if self.window_title:
             hwnd = find_window(self.window_title)
             if hwnd:
@@ -196,7 +196,7 @@ class GameWatcher:
                 img = grab_window(hwnd)
                 if img:
                     return img
-            # 窗口不存在或抓图失败：尝试 mss 全屏
+            self.status = "window_not_found"
         return grab_fullscreen()
 
     def _loop(self) -> None:
