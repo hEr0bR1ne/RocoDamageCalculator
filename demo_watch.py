@@ -28,7 +28,7 @@ except Exception:
 from roco.capture import grab_screen_region, frame_diff
 
 # ── 固定截图区域：左上角 1920×1080 ───────────────────────────────────────────
-REGION = {"left": 0, "top": 0, "width": 1920, "height": 1080}
+REGION = {"left": 0, "top": 40, "width": 1920, "height": 1080}
 print(f"固定区域: {REGION}")
 
 
