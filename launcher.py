@@ -210,7 +210,18 @@ class OutputWindow(tk.Toplevel):
         self.text.pack(fill="both", expand=True, padx=6, pady=6)
         self.text.config(state="disabled")
 
+    def clear(self):
+        self.text.config(state="normal")
+        self.text.delete("1.0", "end")
+        self.text.config(state="disabled")
+
     def append(self, line: str):
+        # \x0c (form-feed) is a clear-screen sentinel emitted before each analysis
+        if "\x0c" in line:
+            self.clear()
+            line = line.replace("\x0c", "")
+            if not line:  # nothing left after stripping sentinel
+                return
         self.text.config(state="normal")
         self.text.insert("end", line)
         self.text.see("end")
@@ -269,9 +280,20 @@ def action_analyzer_clipboard(card: ToolCard):
 
 
 def action_analyzer_watch(card: ToolCard):
-    # 2K 显示器(2560×1440)：游戏占左侧 1920×1080，输出窗口贴右侧同等高度
-    out = OutputWindow(card.winfo_toplevel(), "对战截图分析器 — 自动监控",
-                       geometry="640x1080+1920+0")
+    top = card.winfo_toplevel()
+    sw = top.winfo_screenwidth()   # 逻辑像素（已考虑 DPI 缩放）
+    sh = top.winfo_screenheight()
+    win_h = max(400, sh - 80)      # 留出任务栏空间
+    if sw > 1920:
+        # 宽屏：贴在游戏右侧
+        win_x = 1920
+        win_w = sw - 1920
+    else:
+        # 窄屏：右对齐，宽度取屏幕的 1/3（至少 360px）
+        win_w = max(360, sw // 3)
+        win_x = sw - win_w
+    out = OutputWindow(top, "对战截图分析器 — 自动监控",
+                       geometry=f"{win_w}x{win_h}+{win_x}+0")
     args = ([sys.executable, "--tool", "analyzer-watch"] if _IS_FROZEN
             else [PYTHON, "-u", "-X", "utf8", str(ROOT / "battle_analyzer.py"),
                   "--watch", "--window", "洛克王国：世界",

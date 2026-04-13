@@ -302,6 +302,8 @@ def _quick_damage(self_name: str, enemy_name: str, analysis: dict,
 
 
 def print_analysis(analysis: dict, db: dict, spirit_names: list, interactive: bool = True) -> None:
+    # \x0c 通知 OutputWindow 清屏（监控模式每次新结果前刷新显示）
+    print("\x0c", end="", flush=True)
     print()
     print("=" * 60)
     print("  对战截图分析结果")
