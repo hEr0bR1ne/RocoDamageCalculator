@@ -327,6 +327,38 @@ def main_loop(db: dict, spirit_names: list, skill_names: list) -> None:
         time.sleep(1.5)
 
 
+def main_watch(db: dict, spirit_names: list, skill_names: list,
+               window_title: str | None, threshold: float) -> None:
+    """mss + 帧差分自动监控模式。"""
+    from .capture import GameWatcher
+
+    def _on_change(img):
+        print(f"\n  [自动截图] 检测到场面变化  {img.size[0]}×{img.size[1]}")
+        try:
+            analysis = analyze_image(img, db, spirit_names, skill_names)
+            print_analysis(analysis, db, spirit_names, interactive=False)
+        except Exception as e:
+            print(f"  [error] 分析失败：{e}")
+
+    watcher = GameWatcher(
+        on_change=_on_change,
+        window_title=window_title,
+        diff_threshold=threshold,
+    )
+
+    title_hint = f'"{window_title}"' if window_title else "全屏"
+    print(f"自动监控模式  目标窗口={title_hint}  阈值={threshold}")
+    print("场面发生明显变化时自动触发分析，按 Ctrl+C 退出。\n")
+    watcher.start()
+    try:
+        while True:
+            time.sleep(0.5)
+            if watcher.status == "window_not_found":
+                print(f"  [capture] 未找到窗口 {title_hint!r}，继续等待……", end="\r")
+    finally:
+        watcher.stop()
+
+
 def main_once(path: str, db: dict, spirit_names: list, skill_names: list) -> None:
     img = Image.open(path)
     print(f"分析图片：{path}  ({img.size[0]}×{img.size[1]})")
@@ -336,7 +368,12 @@ def main_once(path: str, db: dict, spirit_names: list, skill_names: list) -> Non
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="洛克王国对战截图分析器")
-    parser.add_argument("--once", metavar="IMAGE", help="分析单张截图后退出")
+    parser.add_argument("--once",      metavar="IMAGE",  help="分析单张截图后退出")
+    parser.add_argument("--watch",     action="store_true", help="自动监控游戏窗口（mss + 帧差分）")
+    parser.add_argument("--window",    metavar="TITLE",  default="洛克王国",
+                        help="游戏窗口标题（--watch 模式用）")
+    parser.add_argument("--threshold", metavar="N",      type=float, default=8.0,
+                        help="帧差分触发阈值，默认 8.0")
     args = parser.parse_args()
 
     print("加载精灵数据库……")
@@ -345,6 +382,10 @@ def main() -> None:
 
     if args.once:
         main_once(args.once, db, spirit_names, skill_names)
+    elif args.watch:
+        main_watch(db, spirit_names, skill_names,
+                   window_title=args.window or None,
+                   threshold=args.threshold)
     else:
         main_loop(db, spirit_names, skill_names)
 

@@ -38,6 +38,15 @@ def _tool_dispatch() -> None:
         except KeyboardInterrupt:
             pass
 
+    elif tool == "analyzer-watch":
+        import sys as _s
+        _s.argv = [_s.argv[0], "--watch"]
+        from roco.analyzer import main as _main
+        try:
+            _main()
+        except KeyboardInterrupt:
+            pass
+
     elif tool == "damage-calc":
         # GUI 子系统进程，需显式分配控制台窗口才能交互
         import ctypes
@@ -237,6 +246,13 @@ def action_analyzer_clipboard(card: ToolCard):
     _launch_subprocess(card, args, out)
 
 
+def action_analyzer_watch(card: ToolCard):
+    out = OutputWindow(card.winfo_toplevel(), "对战截图分析器 — 自动监控")
+    args = ([sys.executable, "--tool", "analyzer-watch"] if _IS_FROZEN
+            else [PYTHON, str(ROOT / "battle_analyzer.py"), "--watch"])
+    _launch_subprocess(card, args, out)
+
+
 def action_analyzer_once(card: ToolCard):
     from tkinter import filedialog
     path = filedialog.askopenfilename(
@@ -300,9 +316,12 @@ class Launcher(tk.Tk):
             ("图形计算器",
              "可视化伤害计算界面，支持双方精灵、技能、天气、Buff 等参数。",
              action_gui, "启动 GUI", ACCENT),
+            ("截图分析 — 自动监控",
+             "自动检测游戏窗口画面变化，场面切换时立即 OCR 分析，无需手动截图。",
+             action_analyzer_watch, "开始监控", GREEN),
             ("截图分析 — 剪切板监听",
              "截图后复制到剪切板，自动 OCR 识别双方精灵和技能并计算伤害。",
-             action_analyzer_clipboard, "开始监听", GREEN),
+             action_analyzer_clipboard, "开始监听", ACCENT),
             ("截图分析 — 选择图片",
              "打开文件选择器，分析指定截图文件。",
              action_analyzer_once, "选择图片", YELLOW),
