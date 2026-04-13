@@ -283,9 +283,9 @@ def action_analyzer_watch(card: ToolCard):
     top = card.winfo_toplevel()
     # 以 1920×1080 为基准计算（远程桌面/DPI 缩放环境下 winfo_screen* 不可靠）
     sw, sh = 1920, 1080
-    win_w = 480
-    win_x = 1520                 # 1360 + 160
-    win_h = 653                  # (sh-100) * 2/3 ≈ 653
+    win_w = 460
+    win_x = 1525                 # 1520 + 5
+    win_h = 871                  # 653 * 4/3 ≈ 871
     out = OutputWindow(top, "对战截图分析器 — 自动监控",
                        geometry=f"{win_w}x{win_h}+{win_x}+0")
     args = ([sys.executable, "--tool", "analyzer-watch"] if _IS_FROZEN
