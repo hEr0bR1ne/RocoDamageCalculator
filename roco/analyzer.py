@@ -130,7 +130,7 @@ def best_match(texts: list[str], candidates: list[str], min_score: float = 0.4) 
 def scale_regions(img_width: int, img_height: int,
                   regions_ratio: dict | None = None) -> dict:
     if regions_ratio is None:
-        regions_ratio = load_regions()
+        regions_ratio, _ = load_regions()
     return {
         k: (int(l * img_width),  int(t * img_height),
             int(r * img_width),  int(b * img_height))
