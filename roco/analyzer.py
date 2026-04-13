@@ -5,6 +5,7 @@ OCR 对战截图分析器
     python -m roco.analyzer --once <图片>  # 分析单张截图
 """
 import argparse
+import re
 import time
 from difflib import SequenceMatcher, get_close_matches
 from pathlib import Path
@@ -14,6 +15,7 @@ from PIL import Image
 from .constants import ALL_STATS
 from .data import DATA_PATH
 from .calculator import calculate
+from .stats import calc_all_stats as _calc_stats, find_skill as _find_skill
 
 # ── OCR 区域定义（归一化比例，适用于任意分辨率）───────────────────────────────
 # 格式：(left, top, right, bottom)，值为 0.0~1.0 相对比例
@@ -25,6 +27,11 @@ REGIONS_RATIO = {
     "skill2":     ( 250/2560, 680/1440,  540/2560,  835/1440),
     "skill3":     ( 250/2560, 845/1440,  540/2560, 1010/1440),
     "skill4":     ( 320/2560,1020/1440,  640/2560, 1210/1440),
+    # 技能卡上方的「显示威力」数字区域（位于技能名上方约 25px）
+    "skill1_power": ( 250/2560, 520/1440,  540/2560,  580/1440),
+    "skill2_power": ( 250/2560, 715/1440,  540/2560,  770/1440),
+    "skill3_power": ( 250/2560, 910/1440,  540/2560,  975/1440),
+    "skill4_power": ( 320/2560,1090/1440,  640/2560, 1155/1440),
 }
 
 # 自定义区域配置文件（OCR Demo 保存后自动加载）
@@ -50,7 +57,12 @@ def load_regions() -> tuple[dict, tuple]:
             regions = {k: tuple(v) for k, v in data.items()
                        if k in REGIONS_RATIO}
             game_area = tuple(data.get(_GAME_AREA_KEY, _DEFAULT_GAME_AREA))
-            if set(regions.keys()) == set(REGIONS_RATIO.keys()):
+            # 填充旧配置文件中缺少的新字段（如 skill*_power）
+            for k, v in REGIONS_RATIO.items():
+                if k not in regions:
+                    regions[k] = v
+            base_keys = {"self_name", "enemy_name", "skill1", "skill2", "skill3", "skill4"}
+            if base_keys.issubset(set(regions.keys())):
                 return regions, game_area
         except Exception:
             pass
@@ -155,11 +167,33 @@ def analyze_image(img: Image.Image, db: dict, spirit_names: list, skill_names: l
     regions = scale_regions(img.width, img.height, regions_ratio)
     result = {}
     for key, box in regions.items():
-        texts      = ocr_region(img, box)
-        candidates = spirit_names if "name" in key else skill_names
-        match, score = best_match(texts, candidates)
-        result[key] = {"match": match, "score": score, "raw": texts}
+        texts = ocr_region(img, box)
+        if key.endswith("_power"):
+            # 只提取数字，不做模糊匹配
+            num = None
+            for t in texts:
+                m = re.search(r'\d+', t)
+                if m:
+                    num = int(m.group())
+                    break
+            result[key] = {"match": num, "score": 1.0 if num is not None else 0.0, "raw": texts}
+        else:
+            candidates = spirit_names if "name" in key else skill_names
+            match, score = best_match(texts, candidates)
+            result[key] = {"match": match, "score": score, "raw": texts}
     return result
+
+
+def parse_skill_meta(effect: str) -> tuple[int, float]:
+    """从技能效果文本提取 (连击数, 减伤率%).
+    例：'造成物伤，3连击。' → (3, 0.0)
+         '减伤70%，应对攻击。' → (1, 70.0)
+    """
+    m = re.search(r'(\d+)连击', effect)
+    hits = int(m.group(1)) if m else 1
+    m = re.search(r'减伤(\d+)%', effect)
+    reduce_pct = float(m.group(1)) if m else 0.0
+    return hits, reduce_pct
 
 
 def find_skills_for_spirit(spirit_name: str, skill_keys: list[str], analysis: dict, db: dict) -> list[dict]:
@@ -222,6 +256,51 @@ def prompt_spirit_name(prompt: str, db: dict, spirit_names: list) -> str | None:
             return None
 
 
+def _quick_damage(self_name: str, enemy_name: str, analysis: dict,
+                  skill_keys: list, db: dict) -> None:
+    """简易公式快速伤害估算：攻÷防×0.9×显示威力×连击×(1-减伤)。"""
+    import math
+    atk_sp = db.get(self_name, {})
+    def_sp = db.get(enemy_name, {})
+    if not atk_sp or not def_sp:
+        return
+
+    atk_stats = _calc_stats(atk_sp, DEFAULT_TALENT, DEFAULT_TALENT_STATS, DEFAULT_NATURE)
+    def_stats = _calc_stats(def_sp, DEFAULT_TALENT, DEFAULT_TALENT_STATS, DEFAULT_NATURE)
+    def_hp    = def_stats["生命"]
+
+    lines = []
+    for i, sk in enumerate(skill_keys, 1):
+        pk = f"skill{i}_power"
+        display_power = analysis.get(pk, {}).get("match")
+        if display_power is None:
+            continue
+        skill_match = analysis[sk].get("match")
+        skill_data  = _find_skill(atk_sp, skill_match) if skill_match else None
+        effect      = skill_data.get("效果", "") if skill_data else ""
+        hits, reduce_pct = parse_skill_meta(effect)
+
+        if skill_data and skill_data.get("类别") == "魔攻":
+            atk_val, def_val, cat = atk_stats["魔攻"], def_stats["魔防"], "魔"
+        else:
+            atk_val, def_val, cat = atk_stats["物攻"], def_stats["物防"], "物"
+
+        dmg = math.floor(atk_val / def_val * 0.9 * display_power * hits * (1 - reduce_pct / 100))
+        pct = dmg / def_hp * 100 if def_hp else 0
+
+        hit_s    = f"x{hits}连" if hits > 1 else ""
+        reduce_s = f"  减伤{reduce_pct:.0f}%" if reduce_pct else ""
+        name_s   = skill_match or "?"
+        lines.append(f"  技能{i} {name_s}  [{cat}攻]  威力={display_power}{hit_s}{reduce_s}"
+                     f"  ->  {dmg} ({pct:.1f}% HP)")
+
+    if lines:
+        print()
+        print("  -- 简易伤害估算 (攻/防x0.9x威力x连击x(1-减伤%)) --")
+        for line in lines:
+            print(line)
+
+
 def print_analysis(analysis: dict, db: dict, spirit_names: list, interactive: bool = True) -> None:
     print()
     print("=" * 60)
@@ -282,6 +361,9 @@ def print_analysis(analysis: dict, db: dict, spirit_names: list, interactive: bo
     if not enemy_name:
         print("  未提供对方精灵名，跳过伤害计算。")
         return
+
+    # ── 简易伤害估算 ──────────────────────────────────────────
+    _quick_damage(self_name, enemy_name, analysis, skill_keys, db)
 
     skills = find_skills_for_spirit(self_name, skill_keys, analysis, db)
 

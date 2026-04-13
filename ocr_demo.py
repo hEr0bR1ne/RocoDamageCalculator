@@ -20,22 +20,34 @@ from PIL import Image, ImageTk
 
 # 区域颜色映射
 COLORS = {
-    "self_name":  "#7c6af7",
-    "enemy_name": "#f7706a",
-    "skill1":     "#4ac97e",
-    "skill2":     "#4ac97e",
-    "skill3":     "#4ac97e",
-    "skill4":     "#4ac97e",
+    "self_name":    "#7c6af7",
+    "enemy_name":   "#f7706a",
+    "skill1":       "#4ac97e",
+    "skill2":       "#4ac97e",
+    "skill3":       "#4ac97e",
+    "skill4":       "#4ac97e",
+    "skill1_power": "#f4c430",
+    "skill2_power": "#f4c430",
+    "skill3_power": "#f4c430",
+    "skill4_power": "#f4c430",
 }
 LABELS = {
-    "self_name":  "己方精灵",
-    "enemy_name": "对方精灵",
-    "skill1": "技能①",
-    "skill2": "技能②",
-    "skill3": "技能③",
-    "skill4": "技能④",
+    "self_name":    "己方精灵",
+    "enemy_name":   "对方精灵",
+    "skill1":       "技能①",
+    "skill2":       "技能②",
+    "skill3":       "技能③",
+    "skill4":       "技能④",
+    "skill1_power": "技能①威力",
+    "skill2_power": "技能②威力",
+    "skill3_power": "技能③威力",
+    "skill4_power": "技能④威力",
 }
-REGION_KEYS = ["self_name", "enemy_name", "skill1", "skill2", "skill3", "skill4"]
+REGION_KEYS = ["self_name", "enemy_name",
+               "skill1", "skill1_power",
+               "skill2", "skill2_power",
+               "skill3", "skill3_power",
+               "skill4", "skill4_power"]
 
 PREVIEW_W = 900
 PREVIEW_H = 506
