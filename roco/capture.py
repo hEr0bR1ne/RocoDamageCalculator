@@ -43,11 +43,23 @@ COOLDOWN           = 2.0   # 触发分析后的冷却秒数，防止同一回合
 # ──────────────────────────────────────────────────────────────────────────────
 
 def find_window(title: str) -> int | None:
-    """返回匹配标题的窗口句柄；找不到返回 None。"""
+    """返回匹配标题的窗口句柄（前缀匹配，忽略末尾空格）；找不到返回 None。"""
     try:
         import win32gui
+        # 先精确匹配
         hwnd = win32gui.FindWindow(None, title)
-        return hwnd if hwnd else None
+        if hwnd:
+            return hwnd
+        # 精确匹配失败时枚举，用 startswith 匹配（游戏标题末尾可能有空格）
+        result = [None]
+        def _cb(h, _):
+            if result[0]:
+                return
+            t = win32gui.GetWindowText(h)
+            if t.startswith(title) or t.strip() == title.strip():
+                result[0] = h
+        win32gui.EnumWindows(_cb, None)
+        return result[0]
     except ImportError:
         return None
 
@@ -146,12 +158,13 @@ def frame_diff(a: Image.Image, b: Image.Image) -> float:
 # 战斗状态分类
 # ──────────────────────────────────────────────────────────────────────────────
 
-# 技能面板区域（左侧技能1～4所在列）——存为占宽高比例，适配任意分辨率
-# 基准坐标：1920×1080屏幕下 _SKILL_PANEL_BOX=(150,380,470,500)  _BANNER_BOX=(1500,220,1780,248)
+# 技能面板区域（左侧技能1～4所在列）——比例坐标，适配任意分辨率
+# 基准：1920×1080 下 (150,380,470,500)
 _SKILL_PANEL_RATIO  = (150/1920, 380/1080, 470/1920, 500/1080)
 _SKILL_PANEL_THRESH = 25.0   # std >= 25 → 有技能卡 → 出招阶段
 
-# “XXX使出了★x” 横幅区域
+# "XXX使出了★x" 横幅区域——比例坐标
+# 基准：1920×1080 下 (1500,220,1780,248)
 _BANNER_RATIO       = (1500/1920, 220/1080, 1780/1920, 248/1080)
 _BANNER_MEAN_THRESH = 60.0   # mean > 60 → 横幅亮起 → 招式释放阶段
 
@@ -168,26 +181,18 @@ def classify_frame(img: Image.Image) -> str:
       'skill_release' — 招式释放阶段（右侧"XXX使出了"横幅亮起）
       'other'         — 其他画面（地图、过场动画等）
 
-    匹配坐标基于比例，自动适配任意分辨率的游戏窗口。
+    坐标基于比例，自动适配任意分辨率。
     """
     w, h = img.size
-    pl, pt, pr, pb = (
-        int(_SKILL_PANEL_RATIO[0] * w), int(_SKILL_PANEL_RATIO[1] * h),
-        int(_SKILL_PANEL_RATIO[2] * w), int(_SKILL_PANEL_RATIO[3] * h),
-    )
-    arr_panel = np.asarray(
-        img.crop((pl, pt, pr, pb)).convert("L"), dtype=np.float32
-    )
+    pl, pt, pr, pb = (int(_SKILL_PANEL_RATIO[0]*w), int(_SKILL_PANEL_RATIO[1]*h),
+                      int(_SKILL_PANEL_RATIO[2]*w), int(_SKILL_PANEL_RATIO[3]*h))
+    arr_panel = np.asarray(img.crop((pl, pt, pr, pb)).convert("L"), dtype=np.float32)
     if arr_panel.std() >= _SKILL_PANEL_THRESH:
         return STATE_SKILL_SELECT
 
-    bl, bt, br, bb = (
-        int(_BANNER_RATIO[0] * w), int(_BANNER_RATIO[1] * h),
-        int(_BANNER_RATIO[2] * w), int(_BANNER_RATIO[3] * h),
-    )
-    arr_banner = np.asarray(
-        img.crop((bl, bt, br, bb)).convert("L"), dtype=np.float32
-    )
+    bl, bt, br, bb = (int(_BANNER_RATIO[0]*w), int(_BANNER_RATIO[1]*h),
+                      int(_BANNER_RATIO[2]*w), int(_BANNER_RATIO[3]*h))
+    arr_banner = np.asarray(img.crop((bl, bt, br, bb)).convert("L"), dtype=np.float32)
     if arr_banner.mean() > _BANNER_MEAN_THRESH:
         return STATE_SKILL_RELEASE
 
@@ -291,15 +296,15 @@ class GameWatcher:
                 now = time.monotonic()
 
                 # ── 帧差检测 ──────────────────────────────────────────────
-                diff = 0.0
-                if self._last_frame is not None:
-                    diff = frame_diff(self._last_frame, img)
+                prev = self._last_frame
                 self._last_frame = img
 
-                if diff < self.diff_threshold and self._last_frame is not None:
-                    # 画面无明显变化，跳过分类
-                    time.sleep(self.poll_interval)
-                    continue
+                if prev is not None:
+                    diff = frame_diff(prev, img)
+                    if diff < self.diff_threshold:
+                        # 画面无明显变化，跳过分类
+                        time.sleep(self.poll_interval)
+                        continue
 
                 # ── 帧状态分类 ────────────────────────────────────────────
                 state = classify_frame(img)

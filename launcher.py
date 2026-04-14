@@ -430,6 +430,84 @@ class GeometryCalibrator(tk.Toplevel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 游戏窗口标定器（拖拽对齐）
+# ─────────────────────────────────────────────────────────────────────────────
+
+class GameWindowCalibrator(tk.Toplevel):
+    """
+    半透明占位窗口：拖动/缩放到与游戏窗口完全重合后点击「保存」，
+    结果写入 data/game_window_rect.json，后续 OCR 按此区域截图。
+    """
+    def __init__(self, parent, on_save=None):
+        super().__init__(parent)
+        self._on_save_cb = on_save
+        self.title("标定游戏窗口区域")
+        self.configure(bg="#e64553")
+        self.attributes("-alpha", 0.45)
+        self.attributes("-topmost", True)
+        self.resizable(True, True)
+
+        saved = _game_rect_load()
+        if saved:
+            self.geometry(f"{saved['width']}x{saved['height']}+{saved['left']}+{saved['top']}")
+        else:
+            sw = self.winfo_screenwidth()
+            sh = self.winfo_screenheight()
+            w, h = min(1920, sw), min(1080, sh)
+            self.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
+
+        self._size_var = tk.StringVar()
+        self._update_size_label()
+        self.bind("<Configure>", lambda e: self._update_size_label())
+
+        tk.Label(self, text="将此窗口拖动并缩放到与游戏画面完全重合",
+                 bg="#e64553", fg="white",
+                 font=("微软雅黑", 14, "bold"), justify="center").pack(expand=True)
+        tk.Label(self, textvariable=self._size_var,
+                 bg="#e64553", fg="white", font=("微软雅黑", 11)).pack()
+
+        btn_row = tk.Frame(self, bg="#e64553")
+        btn_row.pack(pady=14)
+        tk.Button(btn_row, text="✔  保存标定", bg="white", fg="#e64553",
+                  font=("微软雅黑", 11, "bold"), relief="flat",
+                  padx=18, pady=6, cursor="hand2",
+                  command=self._save).pack(side="left", padx=8)
+        tk.Button(btn_row, text="✕  取消", bg=RED, fg="white",
+                  font=("微软雅黑", 11, "bold"), relief="flat",
+                  padx=18, pady=6, cursor="hand2",
+                  command=self.destroy).pack(side="left", padx=8)
+
+    def _update_size_label(self):
+        self.update_idletasks()
+        geo = self.geometry()
+        try:
+            wh, x, y = geo.split("+", 2)
+            w, h = wh.split("x")
+            self._size_var.set(f"{w} × {h}  @  ({x}, {y})")
+        except Exception:
+            self._size_var.set(geo)
+
+    def _save(self):
+        self.update_idletasks()
+        geo = self.geometry()
+        try:
+            wh, x, y = geo.split("+", 2)
+            w, h = wh.split("x")
+            rect = {"left": int(x), "top": int(y), "width": int(w), "height": int(h)}
+        except Exception:
+            import tkinter.messagebox as mb
+            mb.showerror("错误", f"无法解析窗口位置：{geo}")
+            return
+        _game_rect_save(rect)
+        self.destroy()
+        if self._on_save_cb:
+            self._on_save_cb(rect)
+        import tkinter.messagebox as mb
+        mb.showinfo("已保存",
+                    f"游戏窗口已标定：\n{rect['width']}×{rect['height']} @ ({rect['left']}, {rect['top']})\n\n后续 OCR 将按此区域截图识别。")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 自动监控 GUI 窗口
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -450,7 +528,6 @@ class WatchWindow(tk.Toplevel):
         self._card    = card
         self._watcher = None
         self._db = self._spirit_names = self._skill_names = None
-        # 标定的游戏窗口 rect（全屏截图后裁剪的区域）
         self._game_rect: dict | None = _game_rect_load()
 
         self.title("对战分析 — 自动监控")
@@ -514,19 +591,14 @@ class WatchWindow(tk.Toplevel):
         cal_row.pack(fill="x", padx=8, pady=(4, 0))
         tk.Label(cal_row, text="游戏窗口：", bg=PANEL, fg=SUBTEXT,
                  font=F(10)).pack(side="left", padx=(6, 2))
-
-        # 显示当前标定结果
-        self._rect_status_var = tk.StringVar(value="")
-        self._rect_status_var.set(self._rect_status_text())
+        self._rect_status_var = tk.StringVar(value=self._rect_status_text())
         tk.Label(cal_row, textvariable=self._rect_status_var,
                  bg=PANEL, fg=TEXT, font=F(10)).pack(side="left", padx=4)
-
         tk.Button(cal_row, text="🎯 标定游戏窗口",
                   command=self._calibrate,
                   bg=ACCENT, fg="white", font=F(10), relief="flat",
                   padx=8, pady=2, cursor="hand2",
-                  activebackground=ACCENT, activeforeground="white"
-                  ).pack(side="right", padx=6)
+                  activebackground=ACCENT).pack(side="right", padx=6)
 
         # ── 精灵信息行 ────────────────────────────────────────────────────────
         spirit_row = tk.Frame(self, bg=PANEL, pady=6)
@@ -623,36 +695,38 @@ class WatchWindow(tk.Toplevel):
         except Exception as e:
             self._log_append(f"[错误] 数据库加载失败：{e}")
 
-
-
-
     def _rect_status_text(self) -> str:
         r = self._game_rect
         if r is None:
-            return "未标定（使用窗口标题自动查找）"
-        return f"{r['width']}x{r['height']} @ ({r['left']}, {r['top']})"
+            return "未标定（将自动查找游戏窗口）"
+        return f"{r['width']}×{r['height']} @ ({r['left']}, {r['top']})"
 
     def _calibrate(self):
-        from roco.capture import get_window_rect
-        rect = get_window_rect("洛克王国：世界")
-        if rect:
+        def _on_saved(rect):
             self._game_rect = rect
-            _game_rect_save(rect)
-            if self._watcher is not None:
-                self._watcher.region = rect
-            self._rect_status_var.set(self._rect_status_text())
+            self.after(0, lambda: self._rect_status_var.set(self._rect_status_text()))
             self._log_append(
-                f"已标定 游戏窗口: {rect['width']}x{rect['height']} @ ({rect['left']},{rect['top']})"
+                f"已标定 游戏窗口: {rect['width']}×{rect['height']} @ ({rect['left']},{rect['top']})"
             )
-        else:
-            self._log_append("[错误] 未找到游戏窗口，请确认游戏正在运行")
+        GameWindowCalibrator(self, on_save=_on_saved)
 
     def _start_watcher(self):
-        from roco.capture import GameWatcher
+        from roco.capture import GameWatcher, get_window_rect
+        # 优先用标定 rect，否则自动查找游戏窗口
+        region = self._game_rect
+        if region is None:
+            region = get_window_rect("洛克王国：世界")
+            if region:
+                self._game_rect = region
+                _game_rect_save(region)
+                self.after(0, lambda: self._rect_status_var.set(self._rect_status_text()))
+                self._log_append(
+                    f"自动找到游戏窗口: {region['width']}×{region['height']} @ ({region['left']},{region['top']})"
+                )
         self._watcher = GameWatcher(
             on_change=self._on_frame,
             window_title="洛克王国：世界",
-            region=self._game_rect,
+            region=region,
         )
         self._watcher.start()
         self._card.set_running(True)
@@ -665,8 +739,22 @@ class WatchWindow(tk.Toplevel):
             return
         try:
             skill_keys = ["skill1", "skill2", "skill3", "skill4"]
+
+            # region 模式截的就是游戏客户区，game_area=(0,0,1,1)
+            # 若走了全屏 fallback（图像比标定 rect 大），则按 rect 裁剪
+            game_area = None
+            r = self._game_rect
+            if r and (img.width != r["width"] or img.height != r["height"]):
+                sw, sh = img.width, img.height
+                game_area = (
+                    r["left"] / sw, r["top"] / sh,
+                    (r["left"] + r["width"]) / sw,
+                    (r["top"] + r["height"]) / sh,
+                )
+
             analysis = self._analyze_image(
-                img, self._db, self._spirit_names, self._skill_names)
+                img, self._db, self._spirit_names, self._skill_names,
+                game_area=game_area)
 
             self_name  = analysis["self_name"]["match"] or "未识别"
             raw_enemy  = analysis["enemy_name"]["raw"]
