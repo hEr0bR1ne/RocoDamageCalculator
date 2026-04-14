@@ -37,6 +37,32 @@ def _geo_save(geometry: str) -> None:
         pass
 
 
+# ── 游戏窗口位置/尺寸持久化 ─────────────────────────────────────────────────────
+_GAME_RECT_FILE = Path(__file__).parent / "data" / "game_window_rect.json"
+
+
+def _game_rect_load() -> dict | None:
+    """读取上次标定的游戏窗口 rect：{"left":x,"top":y,"width":w,"height":h}。"""
+    try:
+        import json
+        return json.loads(_GAME_RECT_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _game_rect_save(rect: dict) -> None:
+    """将游戏窗口 rect 写入持久化文件。"""
+    try:
+        import json
+        _GAME_RECT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _GAME_RECT_FILE.write_text(
+            json.dumps(rect, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
 # ── DPI 感知（必须在任何 Tk 窗口创建之前设置）──────────────────────────────────
 # PROCESS_SYSTEM_DPI_AWARE = 1：让 Windows 以物理像素汇报坐标，
 # 避免 Windows 对进程做虚拟化缩放，杜绝窗口偶发跳变。
@@ -419,24 +445,13 @@ class WatchWindow(tk.Toplevel):
         (0.0, RED),
     ]
 
-    # OCR 标定分辨率预设：(label, width, height)
-    # 启动前 OCR Demo 标定时游戏是什么分辨率，这里就选对应项
-    _RES_PRESETS = [
-        ("2560×1440", 2560, 1440),   # 默认：当前 REGIONS_RATIO 的标定分辨率
-        ("1920×1080", 1920, 1080),
-        ("1600×900",  1600,  900),
-        ("1280×720",  1280,  720),
-        ("不缩放",   None,  None),   # 高级：不对输入帧做任何处理
-    ]
-
     def __init__(self, parent, card: "ToolCard"):
         super().__init__(parent)
         self._card    = card
         self._watcher = None
         self._db = self._spirit_names = self._skill_names = None
-        # OCR 标定分辨率：截图后先 resize 到此尺寸再 OCR
-        # 必须与标定 REGIONS_RATIO 时的游戏分辨率一致！默认 2560×1440
-        self._game_res: tuple[int, int] | None = (2560, 1440)
+        # 标定的游戏窗口 rect（全屏截图后裁剪的区域）
+        self._game_rect: dict | None = _game_rect_load()
 
         self.title("对战分析 — 自动监控")
         self.configure(bg=BG)
@@ -494,59 +509,24 @@ class WatchWindow(tk.Toplevel):
                   activebackground=RED, activeforeground="white",
                   command=self._on_close).pack(side="right", fill="y")
 
-        # ── 游戏分辨率设置行 ──────────────────────────────────────────────────
-        res_row = tk.Frame(self, bg=PANEL)
-        res_row.pack(fill="x", padx=8, pady=(4, 0))
-        tk.Label(res_row, text="OCR标定分辨率：", bg=PANEL, fg=SUBTEXT,
+        # ── 窗口标定行 ────────────────────────────────────────────────────────
+        cal_row = tk.Frame(self, bg=PANEL)
+        cal_row.pack(fill="x", padx=8, pady=(4, 0))
+        tk.Label(cal_row, text="游戏窗口：", bg=PANEL, fg=SUBTEXT,
                  font=F(10)).pack(side="left", padx=(6, 2))
 
-        self._res_var = tk.StringVar(value="2560×1440")
-        self._res_btns: list[tk.Button] = []
+        # 显示当前标定结果
+        self._rect_status_var = tk.StringVar(value="")
+        self._rect_status_var.set(self._rect_status_text())
+        tk.Label(cal_row, textvariable=self._rect_status_var,
+                 bg=PANEL, fg=TEXT, font=F(10)).pack(side="left", padx=4)
 
-        def _make_res_btn(label, w, h):
-            def _select():
-                self._game_res = (w, h) if w else None
-                self._res_var.set(label)
-                for b in self._res_btns:
-                    b.config(relief="flat",
-                             bg=ACCENT if b.cget("text") == label else PANEL,
-                             fg="white" if b.cget("text") == label else SUBTEXT)
-                self._log_append(f"OCR标定分辨率: {label}")
-            is_default = (label == "2560×1440")
-            btn = tk.Button(res_row, text=label, command=_select,
-                            bg=ACCENT if is_default else PANEL,
-                            fg="white" if is_default else SUBTEXT,
-                            font=F(9), relief="flat",
-                            padx=6, pady=2, cursor="hand2",
-                            activebackground=ACCENT, activeforeground="white")
-            btn.pack(side="left", padx=2)
-            self._res_btns.append(btn)
-
-        for lbl, w, h in self._RES_PRESETS:
-            _make_res_btn(lbl, w, h)
-
-        # 自定义输入
-        tk.Label(res_row, text="螪: ", bg=PANEL, fg=SUBTEXT,
-                 font=F(9)).pack(side="left", padx=(8, 2))
-        self._custom_w = tk.Entry(res_row, width=5, bg="#11111b", fg=TEXT,
-                                  font=F(9), insertbackground=TEXT, relief="flat")
-        self._custom_w.pack(side="left")
-        self._custom_w.insert(0, "2560")
-        tk.Label(res_row, text="×", bg=PANEL, fg=SUBTEXT,
-                 font=F(9)).pack(side="left")
-        self._custom_h = tk.Entry(res_row, width=5, bg="#11111b", fg=TEXT,
-                                  font=F(9), insertbackground=TEXT, relief="flat")
-        self._custom_h.pack(side="left")
-        self._custom_h.insert(0, "1440")
-        tk.Button(res_row, text="✔", command=self._apply_custom_res,
-                  bg=PANEL, fg=GREEN, font=F(9), relief="flat",
-                  padx=4, cursor="hand2",
-                  activebackground=GREEN, activeforeground="white").pack(side="left", padx=(2, 0))
-
-        # 实际捕获尺寸标签
-        self._detected_var = tk.StringVar(value="")
-        tk.Label(res_row, textvariable=self._detected_var,
-                 bg=PANEL, fg=SUBTEXT, font=F(9)).pack(side="right", padx=6)
+        tk.Button(cal_row, text="🎯 标定游戏窗口",
+                  command=self._calibrate,
+                  bg=ACCENT, fg="white", font=F(10), relief="flat",
+                  padx=8, pady=2, cursor="hand2",
+                  activebackground=ACCENT, activeforeground="white"
+                  ).pack(side="right", padx=6)
 
         # ── 精灵信息行 ────────────────────────────────────────────────────────
         spirit_row = tk.Frame(self, bg=PANEL, pady=6)
@@ -643,42 +623,36 @@ class WatchWindow(tk.Toplevel):
         except Exception as e:
             self._log_append(f"[错误] 数据库加载失败：{e}")
 
-    def _apply_custom_res(self):
-        """读取自定义宽高，应用为 OCR 标定分辨率。"""
-        try:
-            w = int(self._custom_w.get().strip())
-            h = int(self._custom_h.get().strip())
-            assert w > 0 and h > 0
-        except Exception:
-            self._log_append("[错误] 分辨率格式无效，请输入正整数（如 2560 × 1440）")
-            return
-        self._game_res = (w, h)
-        self._res_var.set(f"{w}×{h}")
-        for b in self._res_btns:
-            b.config(relief="flat", bg=PANEL, fg=SUBTEXT)
-        self._log_append(f"OCR标定分辨率设为: {w}×{h}（自定义）")
 
-    def _normalize_frame(self, img):
-        """
-        将截图 resize 到 OCR 标定分辨率。
-        不管游戏窗口实际多大，应始终弹到标定时的分辨率，
-        这样 REGIONS_RATIO 乘以宽高才能得到正确的像素坐标。
-        “不缩放”模式（_game_res=None）适合高级用户自行标定。
-        """
-        if self._game_res is None:
-            return img
-        tw, th = self._game_res
-        if img.size == (tw, th):
-            return img
-        return img.resize((tw, th), resample=1)  # BILINEAR
+
+
+    def _rect_status_text(self) -> str:
+        r = self._game_rect
+        if r is None:
+            return "未标定（使用窗口标题自动查找）"
+        return f"{r['width']}x{r['height']} @ ({r['left']}, {r['top']})"
+
+    def _calibrate(self):
+        from roco.capture import get_window_rect
+        rect = get_window_rect("洛克王国：世界")
+        if rect:
+            self._game_rect = rect
+            _game_rect_save(rect)
+            if self._watcher is not None:
+                self._watcher.region = rect
+            self._rect_status_var.set(self._rect_status_text())
+            self._log_append(
+                f"已标定 游戏窗口: {rect['width']}x{rect['height']} @ ({rect['left']},{rect['top']})"
+            )
+        else:
+            self._log_append("[错误] 未找到游戏窗口，请确认游戏正在运行")
 
     def _start_watcher(self):
         from roco.capture import GameWatcher
-        # 不传固定 region，让 grab_window 自动按实际窗口大小截取
-        # 分辨率，从而支持任意窗口尺寸和全屏/窗口化模式
         self._watcher = GameWatcher(
             on_change=self._on_frame,
             window_title="洛克王国：世界",
+            region=self._game_rect,
         )
         self._watcher.start()
         self._card.set_running(True)
@@ -690,14 +664,6 @@ class WatchWindow(tk.Toplevel):
         if self._db is None:
             return
         try:
-            # 更新实际捕获尺寸显示
-            raw_w, raw_h = img.size
-            target = f"{self._game_res[0]}×{self._game_res[1]}" if self._game_res else "不缩放"
-            self.after(0, lambda s=f"捕获 {raw_w}×{raw_h} → {target}": self._detected_var.set(s))
-
-            # 归一化到 OCR 标定分辨率
-            img = self._normalize_frame(img)
-
             skill_keys = ["skill1", "skill2", "skill3", "skill4"]
             analysis = self._analyze_image(
                 img, self._db, self._spirit_names, self._skill_names)

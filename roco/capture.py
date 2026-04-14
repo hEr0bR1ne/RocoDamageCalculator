@@ -70,6 +70,27 @@ def list_windows() -> list[tuple[int, str]]:
     return result
 
 
+def get_window_rect(title: str) -> dict | None:
+    """
+    查找标题匹配的窗口，返回其客户区在屏幕上的物理像素 rect：
+    {"left": x, "top": y, "width": w, "height": h}
+    找不到返回 None。
+    """
+    hwnd = find_window(title)
+    if not hwnd:
+        return None
+    try:
+        import win32gui
+        cx, cy = win32gui.ClientToScreen(hwnd, (0, 0))
+        left, top, right, bottom = win32gui.GetClientRect(hwnd)
+        w, h = right - left, bottom - top
+        if w <= 0 or h <= 0:
+            return None
+        return {"left": cx, "top": cy, "width": w, "height": h}
+    except Exception:
+        return None
+
+
 def grab_window(hwnd: int) -> Image.Image | None:
     """
     用 mss 截取指定窗口的客户区屏幕坐标区域（物理像素）。

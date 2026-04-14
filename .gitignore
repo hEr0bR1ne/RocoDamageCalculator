@@ -17,3 +17,9 @@ dist/
 *.exe
 *.png
 sample/
+# User-specific runtime state
+data/watch_geometry.json
+data/game_window_rect.json
+
+# IDE
+.vscode/
