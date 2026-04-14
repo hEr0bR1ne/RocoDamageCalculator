@@ -508,6 +508,230 @@ class GameWindowCalibrator(tk.Toplevel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# OCR 区域标定器
+# ─────────────────────────────────────────────────────────────────────────────
+
+class OcrCalibrator(tk.Toplevel):
+    """
+    在游戏截图上叠加可拖动矩形框，用户调整到正确位置后保存为 roco_regions.json。
+    每个框可以拖动整体移动，也可以拖动四条边/四个角来调整大小。
+    """
+
+    # 区域定义：key -> (中文标签, 颜色)
+    _REGION_META = {
+        "self_name":    ("己方名称",   "#a6e3a1"),
+        "enemy_name":   ("敌方名称",   "#f38ba8"),
+        "enemy_hp":     ("敌方血量%",  "#89dceb"),
+        "skill1":       ("技能1名称",  "#fab387"),
+        "skill2":       ("技能2名称",  "#fab387"),
+        "skill3":       ("技能3名称",  "#fab387"),
+        "skill4":       ("技能4名称",  "#fab387"),
+        "skill1_power": ("技能1威力",  "#f9e2af"),
+        "skill2_power": ("技能2威力",  "#f9e2af"),
+        "skill3_power": ("技能3威力",  "#f9e2af"),
+        "skill4_power": ("技能4威力",  "#f9e2af"),
+    }
+
+    _HANDLE_SIZE = 6   # 拖拽手柄半径（像素）
+
+    def __init__(self, parent, screenshot: "Image.Image"):
+        super().__init__(parent)
+        self.title("标定 OCR 识别区域")
+        self.configure(bg=BG)
+        self.resizable(True, True)
+
+        from roco.analyzer import load_regions, REGIONS_RATIO
+        import tkinter.font as tkfont
+
+        self._img_orig = screenshot
+        regions_ratio, _ = load_regions()
+
+        # Canvas 尺寸：按屏幕 80% 缩放截图
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        iw, ih = screenshot.size
+        scale = min(sw * 0.80 / iw, sh * 0.85 / ih, 1.0)
+        self._cw = int(iw * scale)
+        self._ch = int(ih * scale)
+        self._scale = scale
+
+        # 把截图缩放到 canvas 尺寸
+        from PIL import ImageTk
+        self._tk_img = ImageTk.PhotoImage(screenshot.resize((self._cw, self._ch)))
+
+        # 初始化各区域的像素坐标（canvas 坐标系）
+        self._boxes: dict[str, list[int]] = {}   # key -> [x1,y1,x2,y2]
+        for key, (l, t, r, b) in regions_ratio.items():
+            self._boxes[key] = [
+                int(l * self._cw), int(t * self._ch),
+                int(r * self._cw), int(b * self._ch),
+            ]
+
+        self._active_key: str | None = None
+        self._drag_mode: str | None = None   # 'move' | 'n'|'s'|'e'|'w'|'ne'|'nw'|'se'|'sw'
+        self._drag_start: tuple = (0, 0)
+        self._box_start: list = []
+
+        self._build_ui()
+        self.update_idletasks()
+        # 居中
+        ww = self._cw + 200
+        wh = self._ch + 80
+        x = (sw - ww) // 2
+        y = (sh - wh) // 2
+        self.geometry(f"{ww}x{wh}+{x}+{y}")
+
+    def _build_ui(self):
+        # ── 左侧图例面板 ──────────────────────────────────────────────────────
+        left = tk.Frame(self, bg=PANEL, width=190)
+        left.pack(side="left", fill="y", padx=(8, 0), pady=8)
+        left.pack_propagate(False)
+
+        tk.Label(left, text="识别区域", bg=PANEL, fg=TEXT,
+                 font=("微软雅黑", 10, "bold")).pack(pady=(8, 4))
+
+        for key, (label, color) in self._REGION_META.items():
+            row = tk.Frame(left, bg=PANEL)
+            row.pack(fill="x", padx=6, pady=1)
+            tk.Label(row, text="■", bg=PANEL, fg=color,
+                     font=("微软雅黑", 10)).pack(side="left")
+            tk.Label(row, text=label, bg=PANEL, fg=TEXT,
+                     font=("微软雅黑", 9)).pack(side="left", padx=4)
+
+        tk.Frame(left, bg=BORDER, height=1).pack(fill="x", padx=6, pady=8)
+        tk.Label(left, text="拖动框体移动\n拖动边缘调整大小",
+                 bg=PANEL, fg=SUBTEXT, font=("微软雅黑", 8),
+                 justify="left").pack(padx=6, anchor="w")
+
+        btn_frame = tk.Frame(left, bg=PANEL)
+        btn_frame.pack(side="bottom", pady=10, fill="x", padx=6)
+        tk.Button(btn_frame, text="✔ 保存", bg=GREEN, fg="#1e1e2e",
+                  font=("微软雅黑", 10, "bold"), relief="flat",
+                  padx=10, pady=4, cursor="hand2",
+                  command=self._save).pack(fill="x", pady=2)
+        tk.Button(btn_frame, text="✕ 取消", bg=RED, fg="white",
+                  font=("微软雅黑", 10, "bold"), relief="flat",
+                  padx=10, pady=4, cursor="hand2",
+                  command=self.destroy).pack(fill="x", pady=2)
+
+        # ── Canvas ────────────────────────────────────────────────────────────
+        self._canvas = tk.Canvas(self, width=self._cw, height=self._ch,
+                                 bg="#000", highlightthickness=0, cursor="crosshair")
+        self._canvas.pack(side="left", padx=8, pady=8)
+        self._canvas.create_image(0, 0, anchor="nw", image=self._tk_img)
+
+        self._canvas.bind("<ButtonPress-1>",   self._on_press)
+        self._canvas.bind("<B1-Motion>",       self._on_drag)
+        self._canvas.bind("<ButtonRelease-1>", self._on_release)
+        self._canvas.bind("<Motion>",          self._on_motion)
+
+        self._draw_all()
+
+    def _draw_all(self):
+        self._canvas.delete("box")
+        hs = self._HANDLE_SIZE
+        for key, (x1, y1, x2, y2) in self._boxes.items():
+            color = self._REGION_META[key][1]
+            label = self._REGION_META[key][0]
+            active = (key == self._active_key)
+            lw = 2 if not active else 3
+
+            # 矩形（半透明用 stipple 模拟）
+            self._canvas.create_rectangle(x1, y1, x2, y2,
+                outline=color, width=lw, fill=color,
+                stipple="gray25", tags="box")
+            # 标签
+            self._canvas.create_text(x1 + 3, y1 + 2, text=label,
+                anchor="nw", fill=color, font=("微软雅黑", 7), tags="box")
+            # 四角手柄
+            for cx, cy in [(x1,y1),(x2,y1),(x1,y2),(x2,y2)]:
+                self._canvas.create_rectangle(
+                    cx-hs, cy-hs, cx+hs, cy+hs,
+                    fill=color, outline="white", width=1, tags="box")
+
+    def _hit_test(self, x, y):
+        """返回 (key, mode)：mode 是 'move'/'n'/'s'/'e'/'w'/'ne'/'nw'/'se'/'sw'"""
+        hs = self._HANDLE_SIZE + 2
+        edge = 5
+        for key, (x1, y1, x2, y2) in self._boxes.items():
+            # 角手柄优先
+            corners = [("nw",x1,y1),("ne",x2,y1),("sw",x1,y2),("se",x2,y2)]
+            for mode, cx, cy in corners:
+                if abs(x-cx) <= hs and abs(y-cy) <= hs:
+                    return key, mode
+            # 边
+            if x1 <= x <= x2:
+                if abs(y - y1) <= edge: return key, "n"
+                if abs(y - y2) <= edge: return key, "s"
+            if y1 <= y <= y2:
+                if abs(x - x1) <= edge: return key, "w"
+                if abs(x - x2) <= edge: return key, "e"
+            # 内部移动
+            if x1+edge < x < x2-edge and y1+edge < y < y2-edge:
+                return key, "move"
+        return None, None
+
+    def _on_motion(self, e):
+        _, mode = self._hit_test(e.x, e.y)
+        cursors = {
+            "move": "fleur", "n": "sb_v_double_arrow", "s": "sb_v_double_arrow",
+            "e": "sb_h_double_arrow", "w": "sb_h_double_arrow",
+            "ne": "size_ne_sw", "sw": "size_ne_sw",
+            "nw": "size_nw_se", "se": "size_nw_se",
+        }
+        self._canvas.config(cursor=cursors.get(mode, "crosshair"))
+
+    def _on_press(self, e):
+        key, mode = self._hit_test(e.x, e.y)
+        if key:
+            self._active_key = key
+            self._drag_mode = mode
+            self._drag_start = (e.x, e.y)
+            self._box_start = list(self._boxes[key])
+            self._draw_all()
+
+    def _on_drag(self, e):
+        if not self._active_key:
+            return
+        dx = e.x - self._drag_start[0]
+        dy = e.y - self._drag_start[1]
+        x1, y1, x2, y2 = self._box_start
+        mode = self._drag_mode
+        min_sz = 10
+
+        if mode == "move":
+            w, h = x2-x1, y2-y1
+            nx1 = max(0, min(self._cw - w, x1 + dx))
+            ny1 = max(0, min(self._ch - h, y1 + dy))
+            self._boxes[self._active_key] = [nx1, ny1, nx1+w, ny1+h]
+        else:
+            nx1, ny1, nx2, ny2 = x1, y1, x2, y2
+            if "n" in mode: ny1 = max(0,          min(y2-min_sz, y1+dy))
+            if "s" in mode: ny2 = min(self._ch,   max(y1+min_sz, y2+dy))
+            if "w" in mode: nx1 = max(0,           min(x2-min_sz, x1+dx))
+            if "e" in mode: nx2 = min(self._cw,   max(x1+min_sz, x2+dx))
+            self._boxes[self._active_key] = [nx1, ny1, nx2, ny2]
+
+        self._draw_all()
+
+    def _on_release(self, e):
+        self._active_key = None
+        self._drag_mode = None
+
+    def _save(self):
+        from roco.analyzer import save_regions, load_regions
+        _, game_area = load_regions()
+        regions = {
+            key: (x1/self._cw, y1/self._ch, x2/self._cw, y2/self._ch)
+            for key, (x1, y1, x2, y2) in self._boxes.items()
+        }
+        save_regions(regions, game_area)
+        self.destroy()
+        import tkinter.messagebox as mb
+        mb.showinfo("已保存", "OCR 识别区域已保存，下次分析自动生效。")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 自动监控 GUI 窗口
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -594,6 +818,11 @@ class WatchWindow(tk.Toplevel):
         self._rect_status_var = tk.StringVar(value=self._rect_status_text())
         tk.Label(cal_row, textvariable=self._rect_status_var,
                  bg=PANEL, fg=TEXT, font=F(10)).pack(side="left", padx=4)
+        tk.Button(cal_row, text="🖼 标定识别区域",
+                  command=self._calibrate_ocr,
+                  bg=PANEL, fg=SUBTEXT, font=F(10), relief="flat",
+                  padx=8, pady=2, cursor="hand2",
+                  highlightthickness=1, highlightbackground=BORDER).pack(side="right", padx=2)
         tk.Button(cal_row, text="🎯 标定游戏窗口",
                   command=self._calibrate,
                   bg=ACCENT, fg="white", font=F(10), relief="flat",
@@ -709,6 +938,19 @@ class WatchWindow(tk.Toplevel):
                 f"已标定 游戏窗口: {rect['width']}×{rect['height']} @ ({rect['left']},{rect['top']})"
             )
         GameWindowCalibrator(self, on_save=_on_saved)
+
+    def _calibrate_ocr(self):
+        from roco.capture import get_window_rect, grab_screen_region
+        rect = self._game_rect or get_window_rect("洛克王国：世界")
+        if rect is None:
+            self._log_append("[错误] 未找到游戏窗口，请先标定游戏窗口或确认游戏正在运行")
+            return
+        try:
+            img = grab_screen_region(rect)
+        except Exception as e:
+            self._log_append(f"[错误] 截图失败：{e}")
+            return
+        OcrCalibrator(self, img)
 
     def _start_watcher(self):
         from roco.capture import GameWatcher, get_window_rect
