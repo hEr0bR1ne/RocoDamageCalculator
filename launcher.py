@@ -12,19 +12,37 @@ from tkinter import scrolledtext
 _IS_FROZEN = getattr(sys, "frozen", False)
 
 
+_CJK_FONT_CACHE: tuple[str, int] | None = None
+
+
 def _pick_cjk_font() -> tuple[str, int]:
-    """选一个系统中支持中文的等宽/近等宽字体，找不到则退回 Consolas。"""
+    """
+    选一个系统中支持中文的等宽/近等宽字体，找不到则退回 Consolas。
+    结果缓存在模块级变量中，保证 Tk() 初始化只执行一次，
+    避免在已有 Tk 根窗口的情况下反复创建/销毁临时 Tk() 导致现有窗口几何信息丢失。
+    """
+    global _CJK_FONT_CACHE
+    if _CJK_FONT_CACHE is not None:
+        return _CJK_FONT_CACHE
     from tkinter import font as _tkfont
-    import tkinter as _tk
-    _r = _tk.Tk(); _r.withdraw()
-    available = set(_tkfont.families())
-    _r.destroy()
+    try:
+        # 如果 Tk 根已存在（在主窗口生命周期内），直接查询字体列表，无需创建第二个 Tk()
+        available = set(_tkfont.families())
+    except Exception:
+        # Tk 尚未初始化时才创建临时根（仅在模块最早一次调用时触发）
+        import tkinter as _tk
+        _r = _tk.Tk()
+        _r.withdraw()
+        available = set(_tkfont.families())
+        _r.destroy()
     for name in ("Noto Sans Mono CJK SC", "Sarasa Mono SC", "Cascadia Code",
                  "Microsoft YaHei Mono", "Noto Sans SC",
                  "Microsoft YaHei UI", "Microsoft JhengHei UI", "Consolas"):
         if name in available:
-            return (name, 9)
-    return ("TkFixedFont", 9)
+            _CJK_FONT_CACHE = (name, 9)
+            return _CJK_FONT_CACHE
+    _CJK_FONT_CACHE = ("TkFixedFont", 9)
+    return _CJK_FONT_CACHE
 
 
 def _tool_dispatch() -> None:
@@ -317,9 +335,10 @@ class WatchWindow(tk.Toplevel):
     def _set_geometry(self):
         sw = self.winfo_screenwidth()
         sh = self.winfo_screenheight()
-        win_x = int(sw * 1525 / 2048)
-        win_w = int(sw * 440  / 2048)
-        win_h = int(sh * 870  / 1152)
+        # 宽度占屏宽约 17%，贴右边距留 2%
+        win_w = max(420, int(sw * 0.17))
+        win_h = min(sh, int(sh * 0.92))
+        win_x = sw - win_w - int(sw * 0.02)
         self.geometry(f"{win_w}x{win_h}+{win_x}+0")
 
     def _build_ui(self):
