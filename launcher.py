@@ -434,30 +434,41 @@ class WatchWindow(tk.Toplevel):
         self._build_ui()
         threading.Thread(target=self._load_db, daemon=True).start()
 
+    # 基准窗口宽：2560×1440 环境下 18% 屏宽≈460px，字号就是基于这个宽度设计的
+    _BASE_WIN_W = 460
+
     def _set_geometry(self):
         # 优先使用用户校准过的值
         saved = _geo_load()
         if saved:
             self.geometry(saved)
-            return
-        # 默认值：贴右边缘
-        self.update_idletasks()
-        sw = self.winfo_screenwidth()
-        sh = self.winfo_screenheight()
-        win_w = max(440, int(sw * 0.18))
-        win_h = min(sh - 40, int(sh * 0.90))
-        win_x = sw - win_w - 8
-        win_y = (sh - win_h) // 2
-        self.geometry(f"{win_w}x{win_h}+{win_x}+{win_y}")
+            try:
+                win_w = int(saved.split("x")[0])
+            except Exception:
+                win_w = self._BASE_WIN_W
+        else:
+            # 默认值：贴右边缘
+            self.update_idletasks()
+            sw = self.winfo_screenwidth()
+            sh = self.winfo_screenheight()
+            win_w = max(440, int(sw * 0.18))
+            win_h = min(sh - 40, int(sh * 0.90))
+            win_x = sw - win_w - 8
+            win_y = (sh - win_h) // 2
+            self.geometry(f"{win_w}x{win_h}+{win_x}+{win_y}")
+        # 字号缩放比（限制在合理范围）
+        self._fscale = max(0.65, min(1.5, win_w / self._BASE_WIN_W))
 
     def _build_ui(self):
         fn, _ = _pick_cjk_font()
+        sc = self._fscale  # 字号缩放比
 
         def F(size, bold=False):
-            return (fn, size, "bold") if bold else (fn, size)
+            s = max(8, round(size * sc))
+            return (fn, s, "bold") if bold else (fn, s)
 
         # ── 顶栏 ─────────────────────────────────────────────────────────────
-        hdr = tk.Frame(self, bg=ACCENT, height=48)
+        hdr = tk.Frame(self, bg=ACCENT, height=max(32, round(48 * sc)))
         hdr.pack(fill="x")
         hdr.pack_propagate(False)
         tk.Label(hdr, text="⚔  对战分析  自动监控", bg=ACCENT, fg="white",
@@ -545,7 +556,7 @@ class WatchWindow(tk.Toplevel):
             })
 
         # ── 底部日志栏 ────────────────────────────────────────────────────────
-        self._log = tk.Text(self, bg="#11111b", fg=SUBTEXT, font=(fn, 14),
+        self._log = tk.Text(self, bg="#11111b", fg=SUBTEXT, font=F(11),
                             height=3, relief="flat", state="disabled",
                             wrap="word", padx=6, pady=4)
         self._log.pack(fill="x")
