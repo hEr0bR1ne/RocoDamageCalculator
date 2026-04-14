@@ -11,6 +11,18 @@ from tkinter import scrolledtext
 
 _IS_FROZEN = getattr(sys, "frozen", False)
 
+# ── DPI 感知（必须在任何 Tk 窗口创建之前设置）──────────────────────────────────
+# PROCESS_SYSTEM_DPI_AWARE = 1：让 Windows 以物理像素汇报坐标，
+# 避免 Windows 对进程做虚拟化缩放，杜绝窗口偶发跳变。
+try:
+    import ctypes
+    ctypes.windll.shcore.SetProcessDpiAwareness(1)
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
 
 _CJK_FONT_CACHE: tuple[str, int] | None = None
 
@@ -333,13 +345,16 @@ class WatchWindow(tk.Toplevel):
         threading.Thread(target=self._load_db, daemon=True).start()
 
     def _set_geometry(self):
+        # winfo_screenwidth/height 在 SetProcessDpiAwareness(1) 后返回物理像素
+        self.update_idletasks()
         sw = self.winfo_screenwidth()
         sh = self.winfo_screenheight()
-        # 宽度占屏宽约 17%，贴右边距留 2%
-        win_w = max(420, int(sw * 0.17))
-        win_h = min(sh, int(sh * 0.92))
-        win_x = sw - win_w - int(sw * 0.02)
-        self.geometry(f"{win_w}x{win_h}+{win_x}+0")
+        win_w = max(440, int(sw * 0.18))
+        win_h = min(sh, int(sh * 0.94))
+        # 贴右边缘，留 8px 间隙
+        win_x = sw - win_w - 8
+        win_y = (sh - win_h) // 2
+        self.geometry(f"{win_w}x{win_h}+{win_x}+{win_y}")
 
     def _build_ui(self):
         fn, _ = _pick_cjk_font()
@@ -648,6 +663,12 @@ class Launcher(tk.Tk):
         self.title("RocoDamageCalculator — 启动器")
         self.configure(bg=BG)
         self.resizable(False, False)
+        # 关闭 Tk 内部自动 DPI 缩放（坐标已由 SetProcessDpiAwareness 处理）
+        try:
+            self.tk.call("tk", "scaling", "-displayof", ".",
+                         96.0 / 72.0)  # 1× base: 96 DPI → 96/72 pt-per-px
+        except Exception:
+            pass
 
         # 标题栏
         hdr = tk.Frame(self, bg=BG)
@@ -695,6 +716,17 @@ class Launcher(tk.Tk):
         # 底部提示
         tk.Label(self, text="提示：爬虫运行时请勿关闭输出窗口",
                  bg=BG, fg=SUBTEXT, font=("微软雅黑", 8)).pack(pady=(0, 10))
+
+        # 布局完成后锁定尺寸，防止后续 Toplevel 开启时 Tk 重排导致主窗口跳变
+        self.update_idletasks()
+        w = self.winfo_reqwidth()
+        h = self.winfo_reqheight()
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        # 居中偏左放置（不遮挡游戏画面右侧区域）
+        x = max(0, (sw // 2 - w) // 2)
+        y = max(0, (sh - h) // 2)
+        self.geometry(f"{w}x{h}+{x}+{y}")
 
 
 if __name__ == "__main__":
