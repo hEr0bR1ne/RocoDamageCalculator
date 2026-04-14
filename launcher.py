@@ -419,11 +419,22 @@ class WatchWindow(tk.Toplevel):
         (0.0, RED),
     ]
 
+    # 常用分辨率预设：(label, width, height)
+    _RES_PRESETS = [
+        ("自动",    None,  None),
+        ("1280×720",  1280,  720),
+        ("1600×900",  1600,  900),
+        ("1920×1080", 1920, 1080),
+        ("2560×1440", 2560, 1440),
+    ]
+
     def __init__(self, parent, card: "ToolCard"):
         super().__init__(parent)
         self._card    = card
         self._watcher = None
         self._db = self._spirit_names = self._skill_names = None
+        # 目标分辨率：None=自动（保持原始尺寸），或 (width, height)
+        self._game_res: tuple[int,int] | None = None
 
         self.title("对战分析 — 自动监控")
         self.configure(bg=BG)
@@ -480,6 +491,59 @@ class WatchWindow(tk.Toplevel):
                   font=F(18), padx=10, cursor="hand2",
                   activebackground=RED, activeforeground="white",
                   command=self._on_close).pack(side="right", fill="y")
+
+        # ── 游戏分辨率设置行 ──────────────────────────────────────────────────
+        res_row = tk.Frame(self, bg=PANEL)
+        res_row.pack(fill="x", padx=8, pady=(4, 0))
+        tk.Label(res_row, text="游戏分辨率：", bg=PANEL, fg=SUBTEXT,
+                 font=F(10)).pack(side="left", padx=(6, 2))
+
+        self._res_var = tk.StringVar(value="自动")
+        self._res_btns: list[tk.Button] = []
+
+        def _make_res_btn(label, w, h):
+            def _select():
+                self._game_res = (w, h) if w else None
+                self._res_var.set(label)
+                for b in self._res_btns:
+                    b.config(relief="flat",
+                             bg=ACCENT if b.cget("text") == label else PANEL,
+                             fg="white" if b.cget("text") == label else SUBTEXT)
+                self._log_append(f"分辨率设为: {label}")
+            btn = tk.Button(res_row, text=label, command=_select,
+                            bg=ACCENT if label == "自动" else PANEL,
+                            fg="white" if label == "自动" else SUBTEXT,
+                            font=F(9), relief="flat",
+                            padx=6, pady=2, cursor="hand2",
+                            activebackground=ACCENT, activeforeground="white")
+            btn.pack(side="left", padx=2)
+            self._res_btns.append(btn)
+
+        for lbl, w, h in self._RES_PRESETS:
+            _make_res_btn(lbl, w, h)
+
+        # 自定义输入
+        tk.Label(res_row, text="自定义:", bg=PANEL, fg=SUBTEXT,
+                 font=F(9)).pack(side="left", padx=(8, 2))
+        self._custom_w = tk.Entry(res_row, width=5, bg="#11111b", fg=TEXT,
+                                  font=F(9), insertbackground=TEXT, relief="flat")
+        self._custom_w.pack(side="left")
+        self._custom_w.insert(0, "1920")
+        tk.Label(res_row, text="×", bg=PANEL, fg=SUBTEXT,
+                 font=F(9)).pack(side="left")
+        self._custom_h = tk.Entry(res_row, width=5, bg="#11111b", fg=TEXT,
+                                  font=F(9), insertbackground=TEXT, relief="flat")
+        self._custom_h.pack(side="left")
+        self._custom_h.insert(0, "1080")
+        tk.Button(res_row, text="✔", command=self._apply_custom_res,
+                  bg=PANEL, fg=GREEN, font=F(9), relief="flat",
+                  padx=4, cursor="hand2",
+                  activebackground=GREEN, activeforeground="white").pack(side="left", padx=(2, 0))
+
+        # 实际检测尺寸标签
+        self._detected_var = tk.StringVar(value="")
+        tk.Label(res_row, textvariable=self._detected_var,
+                 bg=PANEL, fg=SUBTEXT, font=F(9)).pack(side="right", padx=6)
 
         # ── 精灵信息行 ────────────────────────────────────────────────────────
         spirit_row = tk.Frame(self, bg=PANEL, pady=6)
@@ -576,6 +640,30 @@ class WatchWindow(tk.Toplevel):
         except Exception as e:
             self._log_append(f"[错误] 数据库加载失败：{e}")
 
+    def _apply_custom_res(self):
+        """读取自定义宽高输入框，应用为目标分辨率。"""
+        try:
+            w = int(self._custom_w.get().strip())
+            h = int(self._custom_h.get().strip())
+            assert w > 0 and h > 0
+        except Exception:
+            self._log_append("[错误] 分辨率格式无效，请输入正整数（如 1920 × 1080）")
+            return
+        self._game_res = (w, h)
+        self._res_var.set(f"{w}×{h}")
+        for b in self._res_btns:
+            b.config(relief="flat", bg=PANEL, fg=SUBTEXT)
+        self._log_append(f"分辨率设为自定义: {w}×{h}")
+
+    def _normalize_frame(self, img):
+        """按目标分辨率缩放帧；None=保持原尺寸（自动模式）。"""
+        if self._game_res is None:
+            return img
+        tw, th = self._game_res
+        if img.size == (tw, th):
+            return img
+        return img.resize((tw, th), resample=1)  # BILINEAR
+
     def _start_watcher(self):
         from roco.capture import GameWatcher
         # 不传固定 region，让 grab_window 自动按实际窗口大小截取
@@ -594,6 +682,13 @@ class WatchWindow(tk.Toplevel):
         if self._db is None:
             return
         try:
+            # 更新实际检测到的尺寸显示
+            raw_w, raw_h = img.size
+            self.after(0, lambda: self._detected_var.set(f"检测到: {raw_w}×{raw_h}"))
+
+            # 按目标分辨率归一化（自动模式保持原尺寸）
+            img = self._normalize_frame(img)
+
             skill_keys = ["skill1", "skill2", "skill3", "skill4"]
             analysis = self._analyze_image(
                 img, self._db, self._spirit_names, self._skill_names)
