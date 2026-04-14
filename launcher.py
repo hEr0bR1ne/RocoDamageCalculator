@@ -37,6 +37,32 @@ def _geo_save(geometry: str) -> None:
         pass
 
 
+# ── 游戏窗口位置/尺寸持久化 ─────────────────────────────────────────────────────
+_GAME_RECT_FILE = Path(__file__).parent / "data" / "game_window_rect.json"
+
+
+def _game_rect_load() -> dict | None:
+    """读取上次标定的游戏窗口 rect：{"left":x,"top":y,"width":w,"height":h}。"""
+    try:
+        import json
+        return json.loads(_GAME_RECT_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _game_rect_save(rect: dict) -> None:
+    """将游戏窗口 rect 写入持久化文件。"""
+    try:
+        import json
+        _GAME_RECT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _GAME_RECT_FILE.write_text(
+            json.dumps(rect, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
 # ── DPI 感知（必须在任何 Tk 窗口创建之前设置）──────────────────────────────────
 # PROCESS_SYSTEM_DPI_AWARE = 1：让 Windows 以物理像素汇报坐标，
 # 避免 Windows 对进程做虚拟化缩放，杜绝窗口偶发跳变。
@@ -424,6 +450,8 @@ class WatchWindow(tk.Toplevel):
         self._card    = card
         self._watcher = None
         self._db = self._spirit_names = self._skill_names = None
+        # 标定的游戏窗口 rect（全屏截图后裁剪的区域）
+        self._game_rect: dict | None = _game_rect_load()
 
         self.title("对战分析 — 自动监控")
         self.configure(bg=BG)
@@ -480,6 +508,25 @@ class WatchWindow(tk.Toplevel):
                   font=F(18), padx=10, cursor="hand2",
                   activebackground=RED, activeforeground="white",
                   command=self._on_close).pack(side="right", fill="y")
+
+        # ── 窗口标定行 ────────────────────────────────────────────────────────
+        cal_row = tk.Frame(self, bg=PANEL)
+        cal_row.pack(fill="x", padx=8, pady=(4, 0))
+        tk.Label(cal_row, text="游戏窗口：", bg=PANEL, fg=SUBTEXT,
+                 font=F(10)).pack(side="left", padx=(6, 2))
+
+        # 显示当前标定结果
+        self._rect_status_var = tk.StringVar(value="")
+        self._rect_status_var.set(self._rect_status_text())
+        tk.Label(cal_row, textvariable=self._rect_status_var,
+                 bg=PANEL, fg=TEXT, font=F(10)).pack(side="left", padx=4)
+
+        tk.Button(cal_row, text="🎯 标定游戏窗口",
+                  command=self._calibrate,
+                  bg=ACCENT, fg="white", font=F(10), relief="flat",
+                  padx=8, pady=2, cursor="hand2",
+                  activebackground=ACCENT, activeforeground="white"
+                  ).pack(side="right", padx=6)
 
         # ── 精灵信息行 ────────────────────────────────────────────────────────
         spirit_row = tk.Frame(self, bg=PANEL, pady=6)
@@ -576,12 +623,36 @@ class WatchWindow(tk.Toplevel):
         except Exception as e:
             self._log_append(f"[错误] 数据库加载失败：{e}")
 
+
+
+
+    def _rect_status_text(self) -> str:
+        r = self._game_rect
+        if r is None:
+            return "未标定（使用窗口标题自动查找）"
+        return f"{r['width']}x{r['height']} @ ({r['left']}, {r['top']})"
+
+    def _calibrate(self):
+        from roco.capture import get_window_rect
+        rect = get_window_rect("洛克王国：世界")
+        if rect:
+            self._game_rect = rect
+            _game_rect_save(rect)
+            if self._watcher is not None:
+                self._watcher.region = rect
+            self._rect_status_var.set(self._rect_status_text())
+            self._log_append(
+                f"已标定 游戏窗口: {rect['width']}x{rect['height']} @ ({rect['left']},{rect['top']})"
+            )
+        else:
+            self._log_append("[错误] 未找到游戏窗口，请确认游戏正在运行")
+
     def _start_watcher(self):
         from roco.capture import GameWatcher
         self._watcher = GameWatcher(
             on_change=self._on_frame,
             window_title="洛克王国：世界",
-            region={"left": 0, "top": 40, "width": 1920, "height": 1080},
+            region=self._game_rect,
         )
         self._watcher.start()
         self._card.set_running(True)
