@@ -471,14 +471,26 @@ class WatchWindow(tk.Toplevel):
                   command=self._on_close).pack(side="right", fill="y")
 
         # ── 精灵信息行 ────────────────────────────────────────────────────────
-        spirit_row = tk.Frame(self, bg=PANEL, pady=8)
+        spirit_row = tk.Frame(self, bg=PANEL, pady=6)
         spirit_row.pack(fill="x", padx=8, pady=(6, 0))
-        self._self_var  = tk.StringVar(value="己方：—")
-        self._enemy_var = tk.StringVar(value="对方：—")
-        tk.Label(spirit_row, textvariable=self._self_var,
-                 bg=PANEL, fg=GREEN, font=F(22, True)).pack(side="left", padx=8)
-        tk.Label(spirit_row, textvariable=self._enemy_var,
-                 bg=PANEL, fg=RED,   font=F(22, True)).pack(side="left", padx=8)
+
+        # 左侧：己方
+        self_col = tk.Frame(spirit_row, bg=PANEL)
+        self_col.pack(side="left", padx=8)
+        self._self_var = tk.StringVar(value="己方：—")
+        tk.Label(self_col, textvariable=self._self_var,
+                 bg=PANEL, fg=GREEN, font=F(16, True)).pack(anchor="w")
+
+        # 右侧：敌方（名称 + 血量）
+        enemy_col = tk.Frame(spirit_row, bg=PANEL)
+        enemy_col.pack(side="left", padx=8)
+        self._enemy_var = tk.StringVar(value="敌方：—")
+        tk.Label(enemy_col, textvariable=self._enemy_var,
+                 bg=PANEL, fg=RED, font=F(16, True)).pack(anchor="w")
+        self._enemy_hp_var   = tk.StringVar(value="")
+        self._enemy_hp_label = tk.Label(enemy_col, textvariable=self._enemy_hp_var,
+                                        bg=PANEL, fg=GREEN, font=F(20, True))
+        self._enemy_hp_label.pack(anchor="w")
 
         # ── 技能卡区域 ────────────────────────────────────────────────────────
         skills_frame = tk.Frame(self, bg=BG)
@@ -581,20 +593,37 @@ class WatchWindow(tk.Toplevel):
                 enemy_name = None
             enemy_display = enemy_name or ("、".join(raw_enemy) or "未识别")
 
+            # 敌方血量百分比
+            enemy_hp = analysis.get("enemy_hp", {}).get("match")  # int 0-100 或 None
+
             rows = self._calc_quick(
                 self_name, enemy_name or "", analysis, skill_keys, self._db)
 
-            self.after(0, lambda sn=self_name, en=enemy_display, rw=rows:
-                       self._update_ui(sn, en, rw))
+            self.after(0, lambda sn=self_name, en=enemy_display, hp=enemy_hp, rw=rows:
+                       self._update_ui(sn, en, hp, rw))
         except Exception as e:
             import traceback
             self._log_append(f"[错误] {e}\n{traceback.format_exc()}")
 
     # ── UI 更新（主线程）─────────────────────────────────────────────────────
 
-    def _update_ui(self, self_name: str, enemy_name: str, rows: list):
+    def _update_ui(self, self_name: str, enemy_name: str, enemy_hp: int | None, rows: list):
         self._self_var.set(f"⚔ {self_name}")
         self._enemy_var.set(f"🛡 {enemy_name}")
+
+        # 血量显示并配色
+        if enemy_hp is not None:
+            hp = max(0, min(100, enemy_hp))
+            if hp > 60:
+                hp_color = GREEN
+            elif hp > 30:
+                hp_color = YELLOW
+            else:
+                hp_color = RED
+            self._enemy_hp_var.set(f"🟥 {hp}% HP")
+            self._enemy_hp_label.config(fg=hp_color)
+        else:
+            self._enemy_hp_var.set("")
 
         for r, c in zip(rows, self._skill_cards):
             score = r.get("score", 0)
