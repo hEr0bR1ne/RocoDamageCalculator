@@ -578,10 +578,11 @@ class WatchWindow(tk.Toplevel):
 
     def _start_watcher(self):
         from roco.capture import GameWatcher
+        # 不传固定 region，让 grab_window 自动按实际窗口大小截取
+        # 分辨率，从而支持任意窗口尺寸和全屏/窗口化模式
         self._watcher = GameWatcher(
             on_change=self._on_frame,
             window_title="洛克王国：世界",
-            region={"left": 0, "top": 40, "width": 1920, "height": 1080},
         )
         self._watcher.start()
         self._card.set_running(True)

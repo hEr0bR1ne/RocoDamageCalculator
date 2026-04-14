@@ -125,12 +125,13 @@ def frame_diff(a: Image.Image, b: Image.Image) -> float:
 # 战斗状态分类
 # ──────────────────────────────────────────────────────────────────────────────
 
-# 技能面板区域（左侧技能1～4所在列）
-_SKILL_PANEL_BOX   = (150, 380, 470, 500)
+# 技能面板区域（左侧技能1～4所在列）——存为占宽高比例，适配任意分辨率
+# 基准坐标：1920×1080屏幕下 _SKILL_PANEL_BOX=(150,380,470,500)  _BANNER_BOX=(1500,220,1780,248)
+_SKILL_PANEL_RATIO  = (150/1920, 380/1080, 470/1920, 500/1080)
 _SKILL_PANEL_THRESH = 25.0   # std >= 25 → 有技能卡 → 出招阶段
 
-# "XXX使出了★x" 横幅区域
-_BANNER_BOX        = (1500, 220, 1780, 248)
+# “XXX使出了★x” 横幅区域
+_BANNER_RATIO       = (1500/1920, 220/1080, 1780/1920, 248/1080)
 _BANNER_MEAN_THRESH = 60.0   # mean > 60 → 横幅亮起 → 招式释放阶段
 
 # 帧状态字符串
@@ -146,19 +147,25 @@ def classify_frame(img: Image.Image) -> str:
       'skill_release' — 招式释放阶段（右侧"XXX使出了"横幅亮起）
       'other'         — 其他画面（地图、过场动画等）
 
-    判断依据（1920×1080 截图）：
-      技能面板灰度 std >= 25       → skill_select
-      技能面板 std < 25 且横幅亮度 mean > 60 → skill_release
-      否则                       → other
+    匹配坐标基于比例，自动适配任意分辨率的游戏窗口。
     """
+    w, h = img.size
+    pl, pt, pr, pb = (
+        int(_SKILL_PANEL_RATIO[0] * w), int(_SKILL_PANEL_RATIO[1] * h),
+        int(_SKILL_PANEL_RATIO[2] * w), int(_SKILL_PANEL_RATIO[3] * h),
+    )
     arr_panel = np.asarray(
-        img.crop(_SKILL_PANEL_BOX).convert("L"), dtype=np.float32
+        img.crop((pl, pt, pr, pb)).convert("L"), dtype=np.float32
     )
     if arr_panel.std() >= _SKILL_PANEL_THRESH:
         return STATE_SKILL_SELECT
 
+    bl, bt, br, bb = (
+        int(_BANNER_RATIO[0] * w), int(_BANNER_RATIO[1] * h),
+        int(_BANNER_RATIO[2] * w), int(_BANNER_RATIO[3] * h),
+    )
     arr_banner = np.asarray(
-        img.crop(_BANNER_BOX).convert("L"), dtype=np.float32
+        img.crop((bl, bt, br, bb)).convert("L"), dtype=np.float32
     )
     if arr_banner.mean() > _BANNER_MEAN_THRESH:
         return STATE_SKILL_RELEASE
