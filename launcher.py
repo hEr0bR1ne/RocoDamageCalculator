@@ -11,20 +11,76 @@ from tkinter import scrolledtext
 
 _IS_FROZEN = getattr(sys, "frozen", False)
 
+# ── 监控窗口位置/尺寸持久化 ────────────────────────────────────────────────────
+_WATCH_GEO_FILE = Path(__file__).parent / "data" / "watch_geometry.json"
+
+
+def _geo_load() -> str | None:
+    """读取上次保存的 WatchWindow geometry 字符串，如 '460x900+2080+50'。"""
+    try:
+        import json
+        return json.loads(_WATCH_GEO_FILE.read_text(encoding="utf-8")).get("geometry")
+    except Exception:
+        return None
+
+
+def _geo_save(geometry: str) -> None:
+    """将 WatchWindow geometry 字符串写入持久化文件。"""
+    try:
+        import json
+        _WATCH_GEO_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _WATCH_GEO_FILE.write_text(
+            json.dumps({"geometry": geometry}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+# ── DPI 感知（必须在任何 Tk 窗口创建之前设置）──────────────────────────────────
+# PROCESS_SYSTEM_DPI_AWARE = 1：让 Windows 以物理像素汇报坐标，
+# 避免 Windows 对进程做虚拟化缩放，杜绝窗口偶发跳变。
+try:
+    import ctypes
+    ctypes.windll.shcore.SetProcessDpiAwareness(1)
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
+
+_CJK_FONT_CACHE: tuple[str, int] | None = None
+
 
 def _pick_cjk_font() -> tuple[str, int]:
-    """选一个系统中支持中文的等宽/近等宽字体，找不到则退回 Consolas。"""
+    """
+    选一个系统中支持中文的等宽/近等宽字体，找不到则退回 Consolas。
+    结果缓存在模块级变量中，保证 Tk() 初始化只执行一次，
+    避免在已有 Tk 根窗口的情况下反复创建/销毁临时 Tk() 导致现有窗口几何信息丢失。
+    """
+    global _CJK_FONT_CACHE
+    if _CJK_FONT_CACHE is not None:
+        return _CJK_FONT_CACHE
     from tkinter import font as _tkfont
-    import tkinter as _tk
-    _r = _tk.Tk(); _r.withdraw()
-    available = set(_tkfont.families())
-    _r.destroy()
+    try:
+        # 如果 Tk 根已存在（在主窗口生命周期内），直接查询字体列表，无需创建第二个 Tk()
+        available = set(_tkfont.families())
+    except Exception:
+        # Tk 尚未初始化时才创建临时根（仅在模块最早一次调用时触发）
+        import tkinter as _tk
+        _r = _tk.Tk()
+        _r.withdraw()
+        available = set(_tkfont.families())
+        _r.destroy()
     for name in ("Noto Sans Mono CJK SC", "Sarasa Mono SC", "Cascadia Code",
                  "Microsoft YaHei Mono", "Noto Sans SC",
                  "Microsoft YaHei UI", "Microsoft JhengHei UI", "Consolas"):
         if name in available:
-            return (name, 9)
-    return ("TkFixedFont", 9)
+            _CJK_FONT_CACHE = (name, 9)
+            return _CJK_FONT_CACHE
+    _CJK_FONT_CACHE = ("TkFixedFont", 9)
+    return _CJK_FONT_CACHE
 
 
 def _tool_dispatch() -> None:
@@ -284,6 +340,70 @@ class OutputWindow(tk.Toplevel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 监控窗口位置校准器
+# ─────────────────────────────────────────────────────────────────────────────
+
+class GeometryCalibrator(tk.Toplevel):
+    """
+    半透明占位窗口：拖动/缩放到合适位置后点击「保存」，
+    结果写入 data/watch_geometry.json，下次 WatchWindow 直接复用。
+    """
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("校准监控窗口位置")
+        self.configure(bg=ACCENT)
+        self.attributes("-alpha", 0.55)
+        self.resizable(True, True)
+
+        # 先用保存值，否则用默认值
+        saved = _geo_load()
+        if saved:
+            self.geometry(saved)
+        else:
+            sw = self.winfo_screenwidth()
+            sh = self.winfo_screenheight()
+            win_w = max(440, int(sw * 0.18))
+            win_h = min(sh - 40, int(sh * 0.90))
+            win_x = sw - win_w - 8
+            win_y = (sh - win_h) // 2
+            self.geometry(f"{win_w}x{win_h}+{win_x}+{win_y}")
+
+        # 提示文字
+        tk.Label(
+            self,
+            text="拖动 / 缩放此窗口到理想位置\n然后点击「保存」",
+            bg=ACCENT, fg="white",
+            font=("微软雅黑", 13, "bold"),
+            justify="center",
+        ).pack(expand=True)
+
+        btn_row = tk.Frame(self, bg=ACCENT)
+        btn_row.pack(pady=12)
+        tk.Button(
+            btn_row, text="✔  保存",
+            bg="white", fg=ACCENT,
+            font=("微软雅黑", 11, "bold"),
+            relief="flat", padx=18, pady=6, cursor="hand2",
+            command=self._save,
+        ).pack(side="left", padx=8)
+        tk.Button(
+            btn_row, text="✕  取消",
+            bg=RED, fg="white",
+            font=("微软雅黑", 11, "bold"),
+            relief="flat", padx=18, pady=6, cursor="hand2",
+            command=self.destroy,
+        ).pack(side="left", padx=8)
+
+    def _save(self):
+        geo = self.geometry()          # e.g. "460x900+2080+50"
+        _geo_save(geo)
+        self.destroy()
+        # 弹出提示
+        import tkinter.messagebox as mb
+        mb.showinfo("已保存", f"监控窗口位置已保存：\n{geo}\n\n下次开启自动监控将自动应用。")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 自动监控 GUI 窗口
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -315,12 +435,20 @@ class WatchWindow(tk.Toplevel):
         threading.Thread(target=self._load_db, daemon=True).start()
 
     def _set_geometry(self):
+        # 优先使用用户校准过的值
+        saved = _geo_load()
+        if saved:
+            self.geometry(saved)
+            return
+        # 默认值：贴右边缘
+        self.update_idletasks()
         sw = self.winfo_screenwidth()
         sh = self.winfo_screenheight()
-        win_x = int(sw * 1525 / 2048)
-        win_w = int(sw * 440  / 2048)
-        win_h = int(sh * 870  / 1152)
-        self.geometry(f"{win_w}x{win_h}+{win_x}+0")
+        win_w = max(440, int(sw * 0.18))
+        win_h = min(sh - 40, int(sh * 0.90))
+        win_x = sw - win_w - 8
+        win_y = (sh - win_h) // 2
+        self.geometry(f"{win_w}x{win_h}+{win_x}+{win_y}")
 
     def _build_ui(self):
         fn, _ = _pick_cjk_font()
@@ -343,14 +471,26 @@ class WatchWindow(tk.Toplevel):
                   command=self._on_close).pack(side="right", fill="y")
 
         # ── 精灵信息行 ────────────────────────────────────────────────────────
-        spirit_row = tk.Frame(self, bg=PANEL, pady=8)
+        spirit_row = tk.Frame(self, bg=PANEL, pady=6)
         spirit_row.pack(fill="x", padx=8, pady=(6, 0))
-        self._self_var  = tk.StringVar(value="己方：—")
-        self._enemy_var = tk.StringVar(value="对方：—")
-        tk.Label(spirit_row, textvariable=self._self_var,
-                 bg=PANEL, fg=GREEN, font=F(22, True)).pack(side="left", padx=8)
-        tk.Label(spirit_row, textvariable=self._enemy_var,
-                 bg=PANEL, fg=RED,   font=F(22, True)).pack(side="left", padx=8)
+
+        # 左侧：己方
+        self_col = tk.Frame(spirit_row, bg=PANEL)
+        self_col.pack(side="left", padx=8)
+        self._self_var = tk.StringVar(value="己方：—")
+        tk.Label(self_col, textvariable=self._self_var,
+                 bg=PANEL, fg=GREEN, font=F(16, True)).pack(anchor="w")
+
+        # 右侧：敌方（名称 + 血量）
+        enemy_col = tk.Frame(spirit_row, bg=PANEL)
+        enemy_col.pack(side="left", padx=8)
+        self._enemy_var = tk.StringVar(value="敌方：—")
+        tk.Label(enemy_col, textvariable=self._enemy_var,
+                 bg=PANEL, fg=RED, font=F(16, True)).pack(anchor="w")
+        self._enemy_hp_var   = tk.StringVar(value="")
+        self._enemy_hp_label = tk.Label(enemy_col, textvariable=self._enemy_hp_var,
+                                        bg=PANEL, fg=GREEN, font=F(20, True))
+        self._enemy_hp_label.pack(anchor="w")
 
         # ── 技能卡区域 ────────────────────────────────────────────────────────
         skills_frame = tk.Frame(self, bg=BG)
@@ -453,20 +593,37 @@ class WatchWindow(tk.Toplevel):
                 enemy_name = None
             enemy_display = enemy_name or ("、".join(raw_enemy) or "未识别")
 
+            # 敌方血量百分比
+            enemy_hp = analysis.get("enemy_hp", {}).get("match")  # int 0-100 或 None
+
             rows = self._calc_quick(
                 self_name, enemy_name or "", analysis, skill_keys, self._db)
 
-            self.after(0, lambda sn=self_name, en=enemy_display, rw=rows:
-                       self._update_ui(sn, en, rw))
+            self.after(0, lambda sn=self_name, en=enemy_display, hp=enemy_hp, rw=rows:
+                       self._update_ui(sn, en, hp, rw))
         except Exception as e:
             import traceback
             self._log_append(f"[错误] {e}\n{traceback.format_exc()}")
 
     # ── UI 更新（主线程）─────────────────────────────────────────────────────
 
-    def _update_ui(self, self_name: str, enemy_name: str, rows: list):
+    def _update_ui(self, self_name: str, enemy_name: str, enemy_hp: int | None, rows: list):
         self._self_var.set(f"⚔ {self_name}")
         self._enemy_var.set(f"🛡 {enemy_name}")
+
+        # 血量显示并配色
+        if enemy_hp is not None:
+            hp = max(0, min(100, enemy_hp))
+            if hp > 60:
+                hp_color = GREEN
+            elif hp > 30:
+                hp_color = YELLOW
+            else:
+                hp_color = RED
+            self._enemy_hp_var.set(f"🟥 {hp}% HP")
+            self._enemy_hp_label.config(fg=hp_color)
+        else:
+            self._enemy_hp_var.set("")
 
         for r, c in zip(rows, self._skill_cards):
             score = r.get("score", 0)
@@ -629,6 +786,12 @@ class Launcher(tk.Tk):
         self.title("RocoDamageCalculator — 启动器")
         self.configure(bg=BG)
         self.resizable(False, False)
+        # 关闭 Tk 内部自动 DPI 缩放（坐标已由 SetProcessDpiAwareness 处理）
+        try:
+            self.tk.call("tk", "scaling", "-displayof", ".",
+                         96.0 / 72.0)  # 1× base: 96 DPI → 96/72 pt-per-px
+        except Exception:
+            pass
 
         # 标题栏
         hdr = tk.Frame(self, bg=BG)
@@ -637,6 +800,15 @@ class Launcher(tk.Tk):
                  font=("微软雅黑", 18, "bold")).pack(side="left")
         tk.Label(hdr, text="启动器", bg=BG, fg=SUBTEXT,
                  font=("微软雅黑", 12)).pack(side="left", padx=8)
+
+        tk.Button(
+            hdr, text="📐 校准监控窗口位置",
+            bg=PANEL, fg=SUBTEXT,
+            font=("微软雅黑", 9),
+            relief="flat", padx=8, pady=2, cursor="hand2",
+            activebackground=ACCENT, activeforeground="white",
+            command=lambda: GeometryCalibrator(self),
+        ).pack(side="right")
 
         sep = tk.Frame(self, bg=BORDER, height=1)
         sep.pack(fill="x", padx=20, pady=4)
@@ -676,6 +848,17 @@ class Launcher(tk.Tk):
         # 底部提示
         tk.Label(self, text="提示：爬虫运行时请勿关闭输出窗口",
                  bg=BG, fg=SUBTEXT, font=("微软雅黑", 8)).pack(pady=(0, 10))
+
+        # 布局完成后锁定尺寸，防止后续 Toplevel 开启时 Tk 重排导致主窗口跳变
+        self.update_idletasks()
+        w = self.winfo_reqwidth()
+        h = self.winfo_reqheight()
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        # 居中偏左放置（不遮挡游戏画面右侧区域）
+        x = max(0, (sw // 2 - w) // 2)
+        y = max(0, (sh - h) // 2)
+        self.geometry(f"{w}x{h}+{x}+{y}")
 
 
 if __name__ == "__main__":

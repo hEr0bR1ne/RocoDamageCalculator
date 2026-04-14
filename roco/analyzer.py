@@ -23,6 +23,8 @@ from .stats import calc_all_stats as _calc_stats, find_skill as _find_skill
 REGIONS_RATIO = {
     "self_name":  ( 40/2560,  20/1440,  560/2560,  160/1440),
     "enemy_name": (1980/2560,  20/1440, 2490/2560,  160/1440),
+    # 敌方名称正下方显示的血量百分比数字（如 "75%"）
+    "enemy_hp":   (1980/2560, 155/1440, 2490/2560,  235/1440),
     "skill1":     ( 250/2560, 500/1440,  540/2560,  650/1440),
     "skill2":     ( 250/2560, 680/1440,  540/2560,  835/1440),
     "skill3":     ( 250/2560, 845/1440,  540/2560, 1010/1440),
@@ -168,7 +170,7 @@ def analyze_image(img: Image.Image, db: dict, spirit_names: list, skill_names: l
     result = {}
     for key, box in regions.items():
         texts = ocr_region(img, box)
-        if key.endswith("_power"):
+        if key.endswith("_power") or key.endswith("_hp"):
             # 只提取数字，不做模糊匹配
             num = None
             for t in texts:
