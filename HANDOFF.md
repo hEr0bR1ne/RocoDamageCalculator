@@ -1,174 +1,141 @@
-# Agent Handoff — 2026-04-14
+# RocoDamageCalculator — 交接文档
 
-## 项目简介
-
-**RocoDamageCalculator** — 洛克王国 PVP 伤害计算器 + 对战实时监控 GUI。
-仓库：https://github.com/hEr0bR1ne/RocoDamageCalculator
-语言：Python 3.13（主体）+ Next.js 15（Web 版）
-Python 环境：`D:\Program Files\RocoDamageCalculator\.venv`
+> 更新：2026-04-15
 
 ---
 
-## 今日完成的工作（2026-04-14）
+## 项目背景
 
-### 1. 帧分类器 + GameWatcher（`roco/capture.py`）
-
-截图流三态分类：
+洛克王国对战伤害计算器。核心流程：
 
 ```
-skill_panel 区域 (150,380,470,500) std >= 25  →  'skill_select'   出招选择中
-banner 区域 (1500,220,1780,248)  mean > 60    →  'skill_release'  招式释放动画
-其他                                            →  'other'
+自动截图游戏画面
+  → classify_frame 识别战斗阶段
+  → PaddleOCR 识别精灵名 / 技能名 / 威力 / 血量
+  → 查精灵数据库计算伤害
+  → 结果输出到悬浮监控窗 WatchWindow
 ```
 
-- `classify_frame(img)` 用 numpy 灰度统计实现
-- `GameWatcher.__init__` 新增 `on_release` 回调参数
-- `_last_release_trigger` 冷却防重复触发
-- `skill_release` 帧自动保存 `sample/_release_YYYYMMDD_HHMMSS.png`
-- **待做**：`skill_release` 帧的后续分析逻辑（截图已保存，数据处理尚未实现）
+---
 
-### 2. 结构化伤害 API（`roco/analyzer.py`）
+## 已完成功能
 
-新增 `calc_quick_damage(self_name, enemy_name, analysis, skill_keys, db) -> list[dict]`，每项结构：
-
-```python
-{
-  'num': 1,           # 技能序号
-  'name': '十万伏特', # 技能名
-  'score': 0.85,      # OCR 置信度
-  'cat': '特殊',      # 物理/特殊/变化
-  'power': 95,        # 技能威力
-  'hits': 1,          # 连击数
-  'reduce_pct': 0.0,  # 减伤倍率
-  'dmg': 312,         # 估算伤害值
-  'pct_hp': 18.4      # 占敌方 HP 百分比
-}
-```
-
-`BattleAnalyzer._quick_damage()` 改为委托给它，向后兼容。
-
-### 3. WatchWindow 实时监控 GUI（`launcher.py`）
-
-进程内 `tk.Toplevel`，**不开子进程**。布局：
-
-| 区块 | 内容 | 字号 |
+| 模块 | 状态 | 说明 |
 |---|---|---|
-| 顶栏 48px 紫色 `#2D1B69` | 标题 + 状态点 + ✕ 按钮 | 20 / 16 / 18 bold |
-| 精灵行 | 己方 `#00FF88` / 敌方 `#FF4444` | 22 bold |
-| 4 个技能卡 | 序号(20 bold) + 名称(14) + 类别/置信(14) | — |
-| 伤害区 | 伤害数字(32 bold `#FF8C00`) + HP%(18 `#FFD700`) | — |
-| 日志条 | 最近 50 行 | 14 |
+| Launcher GUI | ✅ | 工具卡片入口，子进程管理 |
+| WatchWindow | ✅ | 悬浮监控窗，字体缩放，位置/尺寸持久化 |
+| GeometryCalibrator | ✅ | 半透明拖拽校准 WatchWindow 位置 |
+| 伤害计算公式 | ✅ | `roco/calculator.py` |
+| 精灵/技能数据库 | ✅ | `data/精灵完整数据.json`，爬虫在 `roco/scraper/` |
+| classify_frame | ✅ | 按比例识别出招/释放/其他阶段，适配任意分辨率 |
+| REGIONS_RATIO | ✅ | 按 **1920×1080** 标定，`scale_regions(w,h)` 乘以实际尺寸 |
+| 敌方 HP% OCR | ✅ | `enemy_hp` 区域，WatchWindow 带颜色显示 |
+| `get_window_rect()` | ✅ | `win32gui.ClientToScreen + GetClientRect`，正确排除标题栏/边框 |
+| 游戏窗口标定按钮 | ✅ | WatchWindow 内「🎯 标定游戏窗口」，保存到 `data/game_window_rect.json` |
 
-**窗口几何**（2048×1152 分辨率标定）：
+---
+
+## 当前截图方案及核心问题
+
+### 现有实现
+
+**文件**：`roco/capture.py`
 
 ```python
-_RX = 1525/2048   # 窗口左边 x 比例
-_RW = 440/2048    # 宽比例
-_RH = 870/1152    # 高比例
+def grab_window(hwnd):
+    cx, cy = win32gui.ClientToScreen(hwnd, (0, 0))
+    l, t, r, b = win32gui.GetClientRect(hwnd)
+    return grab_screen_region({"left": cx, "top": cy, "width": r-l, "height": b-t})
+
+def grab_screen_region(region):
+    with mss.mss() as sct:
+        raw = sct.grab(region)
+    return Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
 ```
 
-**关键方法**：
-- `_load_db()` — 后台线程加载数据库
-- `_start_watcher()` — 进程内启动 `GameWatcher`
-- `_on_frame(img)` — 后台线程回调，`self.after(0, ...)` 转主线程
-- `_update_ui(results, analysis)` — 更新 4 个技能卡
-- `_poll_status()` — 1 秒轮询 watcher.status 更新状态点
-- `_on_close()` — 停止 watcher，恢复启动卡片
+### 问题
 
-置信度着色规则：绿 `#00FF88` ≥ 70% / 黄 `#FFD700` ≥ 40% / 红 `#FF4444` < 40%
+`mss` 是**屏幕截图**，截的是该坐标区域当前显示的内容。  
+游戏被其他窗口遮挡时，截到的是遮挡窗口，不是游戏画面。
 
-### 4. PyInstaller 打包
-
-```powershell
-.\.venv\Scripts\pyinstaller.exe launcher.spec
-# 输出：dist/RocoLauncher.exe（95 MB，单文件，含 RapidOCR 模型）
-```
-
-发行 zip（exe + data/，90.9 MB）：
-```powershell
-Compress-Archive -Path "dist\RocoLauncher.exe","data" -DestinationPath "dist\RocoDamageCalculator-v0.0.3-windows.zip" -Force
-```
-
-### 5. GitHub Release v0.0.3
-
-- Tag：`v0.0.3`，分支：`main`，commit：`f711753`
-- Release 页：https://github.com/hEr0bR1ne/RocoDamageCalculator/releases/tag/v0.0.3
-- zip 下载：https://github.com/hEr0bR1ne/RocoDamageCalculator/releases/download/v0.0.3/RocoDamageCalculator-v0.0.3-windows.zip
-
----
-
-## 当前 Git 状态
+验证（已跑）：
 
 ```
-main 分支，最新 commit：f711753  docs: update README for v0.0.3
-已推送到 origin/main
+grab_window 与 grab_screen_region 像素差 = 0.00
 ```
 
-**本地有用户手动编辑、尚未提交的文件**（内容未知，请先 `git diff` 确认）：
-- `launcher.py`
-- `roco/calculator.py`
+两者完全相同，证明底层都走同一个 mss 坐标截图，并非从进程帧缓冲读取。
 
----
+### 正确方案
 
-## 重要技术坑
+用 `PrintWindow(hwnd, hdc, PW_CLIENTONLY)` 直接从进程 DC 读帧缓冲，不依赖窗口可见性。
 
-### PowerShell 5 中文编码问题
-凡是涉及中文内容写 GitHub API，**必须用 Python 脚本**，PowerShell 5 默认 GBK 会把 UTF-8 变乱码。
+**方案 A — win32ui + win32con（纯 pywin32，无额外依赖）**
 
-Python 获取 GitHub token 的正确方式：
 ```python
-import subprocess
-proc = subprocess.run(
-    ['git', 'credential', 'fill'],
-    input="protocol=https\nhost=github.com\n\n",
-    capture_output=True, text=True, encoding='utf-8'
-)
-token = next((l[9:] for l in proc.stdout.splitlines() if l.startswith('password=')), None)
+import win32gui, win32ui
+from PIL import Image
+
+def grab_window_dc(hwnd: int) -> Image.Image:
+    l, t, r, b = win32gui.GetClientRect(hwnd)
+    w, h = r - l, b - t
+
+    hwnd_dc = win32gui.GetWindowDC(hwnd)
+    mfc_dc  = win32ui.CreateDCFromHandle(hwnd_dc)
+    save_dc = mfc_dc.CreateCompatibleDC()
+    bmp     = win32ui.CreateBitmap()
+    bmp.CreateCompatibleBitmap(mfc_dc, w, h)
+    save_dc.SelectObject(bmp)
+
+    # PW_CLIENTONLY = 1，只截客户区，不含标题栏
+    win32gui.PrintWindow(hwnd, save_dc.GetSafeHdc(), 1)
+
+    bmp_info = bmp.GetInfo()
+    raw = bmp.GetBitmapBits(True)
+    img = Image.frombuffer("RGB", (bmp_info["bmWidth"], bmp_info["bmHeight"]),
+                           raw, "raw", "BGRX", 0, 1)
+
+    win32gui.DeleteObject(bmp.GetHandle())
+    save_dc.DeleteDC()
+    mfc_dc.DeleteDC()
+    win32gui.ReleaseDC(hwnd, hwnd_dc)
+    return img
 ```
 
-调用 API 时：
+**方案 B — dxcam（DXGI Desktop Duplication，帧率更高）**
+
 ```python
-import json, urllib.request
-payload = json.dumps({'name': title, 'body': body}, ensure_ascii=False).encode('utf-8')
-req = urllib.request.Request(url, data=payload, method='PATCH',
-    headers={..., 'Content-Type': 'application/json; charset=utf-8'})
+import dxcam
+camera = dxcam.create()
+frame = camera.grab()  # numpy array，全屏
 ```
 
-### 远程桌面分辨率
-实际逻辑分辨率是 **2048×1152**，不是 1920×1080。`winfo_screenwidth()` 在远程桌面下不可靠，WatchWindow 改用硬编码比例常量。
-
-### 截图工具
-`mss` 替代 `BitBlt`，解决远程桌面截图全黑问题。见 `roco/capture.py`。
+> 注意：`dxcam` 对最小化窗口同样无效，但被遮挡时可正常工作。
 
 ---
 
-## 已知问题 / 下一步建议
+## 待解决任务
 
-| 优先级 | 任务 | 位置 |
-|---|---|---|
-| 高 | `skill_release` 帧的后续处理（OCR+伤害记录） | `roco/capture.py` `_loop()` |
-| 中 | WatchWindow 多分辨率适配（当前仅 2048×1152 标定） | `launcher.py` `_set_geometry()` |
-| 中 | 确认并提交用户本地未提交的编辑 | `launcher.py`、`roco/calculator.py` |
-| 低 | 对方精灵手动修正输入框 | `launcher.py` WatchWindow |
-| 低 | HP 血条进度条可视化 | `launcher.py` WatchWindow |
+1. **截图方案替换**  
+   将 `grab_window` 改为基于 `PrintWindow` 的 `grab_window_dc`，测试被遮挡时能否正确截图。
+
+2. **OCR 链路验证**  
+   游戏设为 1920×1080 窗口化，跑完整 OCR 流程，确认 `REGIONS_RATIO` 坐标正确。
+
+3. **标定流程收尾**  
+   `_calibrate()` 已接入 WatchWindow（`launcher.py`），截图方案修好后可端到端测试。
 
 ---
 
-## 常用命令速查
+## 环境
 
-```powershell
-# 激活环境
-& "d:\Program Files\RocoDamageCalculator\.venv\Scripts\Activate.ps1"
+- Python 3.13，venv 在 `.venv/`
+- 关键依赖：`pillow`, `mss`, `pywin32`, `paddleocr`, `numpy`, `opencv-python`
+- 完整依赖见 `requirements.txt`
 
-# 运行启动器
-python launcher.py
+## Git 分支
 
-# 重新打包 exe
-.\.venv\Scripts\pyinstaller.exe launcher.spec
-
-# 查看未提交改动
-git diff
-
-# 推送
-git push
-```
+| 分支 | 说明 |
+|---|---|
+| `main` | 最新稳定，含所有 GUI 修复 + 标定按钮 |
+| `feature/multi-resolution` | 已 merge 进 main |
