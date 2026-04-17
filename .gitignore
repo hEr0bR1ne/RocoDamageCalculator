@@ -23,3 +23,4 @@ data/game_window_rect.json
 
 # IDE
 .vscode/
+roco_regions.json
